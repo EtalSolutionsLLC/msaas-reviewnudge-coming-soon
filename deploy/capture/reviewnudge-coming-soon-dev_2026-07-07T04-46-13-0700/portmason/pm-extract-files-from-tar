@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+# Purpose: Safely extract a Portmason tar.gz artifact into a repository directory.
+# Usage:
+#   pm-extract-files-from-tar ARCHIVE.tar.gz [chg.txt] [TARGET_DIR]
+#   pm-extract-files-from-tar --all ARCHIVE.tar.gz [TARGET_DIR]
+#
+# Contract:
+# - With an explicit change list, only the listed files are extracted.
+# - With only ARCHIVE.tar.gz, embedded project/chg.txt is preferred when present.
+# - When no embedded list exists, ./chg.txt is used automatically when present.
+# - With no embedded or local chg.txt, the complete project/ tree is extracted.
+# - --all forces complete extraction regardless of any change list.
+# - chg.txt entries are repo-relative paths beginning with project/.
+# - blank lines and comments beginning with # are ignored.
+# - the leading project/ prefix is stripped when copying into TARGET_DIR.
+# - files are staged before they are copied into the target.
+
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+ensure_portmason_share() {
+  local script_dir default
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  default="/usr/local/share/portmason/bin"
+
+  if [[ -n "${PORTMASON_SHARE:-}" && -r "${PORTMASON_SHARE}/pm-helpers" ]]; then
+    export PORTMASON_SHARE
+    return 0
+  fi
+
+  if [[ -r "${script_dir}/pm-helpers" ]]; then
+    PORTMASON_SHARE="${script_dir}"
+    export PORTMASON_SHARE
+    return 0
+  fi
+
+  if [[ -r "${default}/pm-helpers" ]]; then
+    PORTMASON_SHARE="${default}"
+    export PORTMASON_SHARE
+    return 0
+  fi
+
+  printf 'ERROR: unable to locate pm-helpers. Set PORTMASON_SHARE or install this script beside pm-helpers.\n' >&2
+  return 2
+}
+
+ensure_portmason_share
+# shellcheck disable=SC1090
+. "${PORTMASON_SHARE}/pm-helpers" --minimal
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  pm-extract-files-from-tar ARCHIVE.tar.gz [chg.txt] [TARGET_DIR]
+  pm-extract-files-from-tar --all ARCHIVE.tar.gz [TARGET_DIR]
+
+Arguments:
+  ARCHIVE.tar.gz  Portmason change-only archive or captured-state archive.
+  chg.txt         Optional finite list of files to extract. Entries must begin with project/.
+  TARGET_DIR      Destination repository directory. Defaults to the current directory.
+
+Default behavior:
+  - An explicitly supplied chg.txt always wins.
+  - Otherwise, embedded project/chg.txt is used when present in the archive.
+  - Otherwise, ./chg.txt is used when present.
+  - Otherwise, the complete project/ tree is extracted.
+  - Use --all to force complete extraction regardless of any change list.
+
+chg.txt format:
+  project/index.html
+  project/assets/css/styles.css
+
+  # Blank lines and comments are ignored.
+USAGE
+}
+
+cleanup() {
+  if [[ -n "${STAGE_DIR:-}" && -d "${STAGE_DIR}" ]]; then
+    rm --recursive --force -- "${STAGE_DIR}"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+normalize_listed_path() {
+  local out_var="${1:?output variable required}"
+  local raw="${2-}"
+  local candidate
+
+  candidate="${raw%$'\r'}"
+
+  if [[ -z "${candidate//[[:space:]]/}" || "${candidate}" =~ ^[[:space:]]*# ]]; then
+    printf -v "${out_var}" '%s' ''
+    return 0
+  fi
+
+  if [[ "${candidate}" =~ ^[[:space:]] || "${candidate}" =~ [[:space:]]$ ]]; then
+    fatal_error "Invalid chg.txt entry with leading or trailing whitespace: ${candidate}" 2
+  fi
+
+  if [[ "${candidate}" != project/* ]]; then
+    fatal_error "Invalid chg.txt entry; expected project/... path: ${candidate}" 2
+  fi
+
+  local relative="${candidate#project/}"
+  if [[ -z "${relative}" ]]; then
+    fatal_error "Invalid chg.txt entry; project/ must identify a file." 2
+  fi
+
+  case "/${relative}/" in
+    *'/../'*|*'/./'*|*'//'*)
+      fatal_error "Unsafe chg.txt entry: ${candidate}" 2
+      ;;
+  esac
+
+  case "${relative}" in
+    /*|*\\*)
+      fatal_error "Unsafe chg.txt entry: ${candidate}" 2
+      ;;
+  esac
+
+  printf -v "${out_var}" '%s' "${candidate}"
+}
+
+validate_archive_member_path() {
+  local member="${1:?archive member required}"
+
+  case "/${member}/" in
+    *'/../'*|*'/./'*|*'//'*)
+      fatal_error "Unsafe archive member path: ${member}" 3
+      ;;
+  esac
+
+  case "${member}" in
+    /*|*\\*)
+      fatal_error "Unsafe archive member path: ${member}" 3
+      ;;
+  esac
+}
+
+normalize_archive_member() {
+  local out_var="${1:?output variable required}"
+  local member="${2:?archive member required}"
+  local computed
+
+  validate_archive_member_path "${member}"
+
+  case "${member}" in
+    project/*)
+      computed="${member}"
+      ;;
+    */project/*)
+      computed="project/${member#*/project/}"
+      ;;
+    *)
+      fatal_error "Archive member is outside the expected project/ tree: ${member}" 3
+      ;;
+  esac
+
+  if [[ "${computed}" == 'project/' || -z "${computed#project/}" ]]; then
+    fatal_error "Archive member does not identify a file: ${member}" 3
+  fi
+
+  printf -v "${out_var}" '%s' "${computed}"
+}
+
+resolve_archive_member() {
+  local out_var="${1:?output variable required}"
+  local listed_path="${2:?listed path required}"
+  local archive_member match_count=0 match=''
+
+  for archive_member in "${ARCHIVE_MEMBERS[@]}"; do
+    if [[ "${archive_member}" == "${listed_path}" || "${archive_member}" == */"${listed_path}" ]]; then
+      match="${archive_member}"
+      ((match_count += 1))
+    fi
+  done
+
+  if (( match_count == 0 )); then
+    fatal_error "Archive does not contain listed file: ${listed_path}" 3
+  fi
+
+  if (( match_count > 1 )); then
+    fatal_error "Archive contains multiple matches for listed file: ${listed_path}" 3
+  fi
+
+  validate_archive_member_path "${match}"
+  printf -v "${out_var}" '%s' "${match}"
+}
+
+find_embedded_change_list_member() {
+  local out_var="${1:?output variable required}"
+  local archive_member normalized match='' match_count=0
+
+  for archive_member in "${ARCHIVE_MEMBERS[@]}"; do
+    [[ "${archive_member}" == */ ]] && continue
+
+    normalize_archive_member normalized "${archive_member}"
+    if [[ "${normalized}" == "project/chg.txt" ]]; then
+      match="${archive_member}"
+      ((match_count += 1))
+    fi
+  done
+
+  if (( match_count > 1 )); then
+    fatal_error "Archive contains multiple embedded project/chg.txt files." 3
+  fi
+
+  printf -v "${out_var}" '%s' "${match}"
+}
+
+extract_embedded_change_list() {
+  local archive="${1:?archive required}"
+  local member="${2:?archive member required}"
+  local destination="${STAGE_DIR}/embedded-chg.txt"
+  local extracted
+
+  assert_regular_archive_member "${archive}" "${member}"
+  tar --extract --gzip --to-stdout --file "${archive}" -- "${member}" > "${destination}"
+
+  [[ -s "${destination}" ]] || fatal_error "Embedded project/chg.txt is empty." 2
+  [[ ! -L "${destination}" ]] || fatal_error "Refusing symlink change list." 3
+
+  extracted="$(realpath -- "${destination}")"
+  printf '%s\n' "${extracted}"
+}
+
+validate_destination() {
+  local target_root="${1:?target root required}"
+  local destination="${2:?destination required}"
+  local resolved
+
+  resolved="$(realpath --canonicalize-missing -- "${destination}")"
+  case "${resolved}" in
+    "${target_root}"|"${target_root}"/*)
+      ;;
+    *)
+      fatal_error "Destination escapes target directory: ${destination}" 4
+      ;;
+  esac
+}
+
+assert_regular_archive_member() {
+  local archive="${1:?archive required}"
+  local member="${2:?archive member required}"
+  local verbose first_char
+
+  verbose="$(tar --list --verbose --gzip --file "${archive}" -- "${member}")"
+  first_char="${verbose:0:1}"
+
+  case "${first_char}" in
+    '-')
+      ;;
+    'd')
+      fatal_error "Archive member is a directory, not a file: ${member}" 3
+      ;;
+    *)
+      fatal_error "Refusing non-regular archive member: ${member}" 3
+      ;;
+  esac
+}
+
+copy_archive_member() {
+  local archive="${1:?archive required}"
+  local target_root="${2:?target root required}"
+  local member="${3:?archive member required}"
+  local normalized="${4:?normalized path required}"
+  local relative staged destination
+
+  relative="${normalized#project/}"
+  assert_regular_archive_member "${archive}" "${member}"
+
+  tar --extract --gzip --file "${archive}" --directory "${STAGE_DIR}" -- "${member}"
+  staged="${STAGE_DIR}/${member}"
+
+  [[ -f "${staged}" ]] || fatal_error "Selected archive member is not a regular file: ${member}" 3
+  [[ ! -L "${staged}" ]] || fatal_error "Refusing symlink archive member: ${member}" 3
+
+  destination="${target_root}/${relative}"
+  validate_destination "${target_root}" "${destination}"
+  mkdir --parents -- "$(dirname -- "${destination}")"
+  cp --preserve=mode,timestamps -- "${staged}" "${destination}"
+
+  log INFO "Extracted: ${normalized} -> ${relative}"
+}
+
+extract_selected_files() {
+  local archive="${1:?archive required}"
+  local change_list="${2:?change list required}"
+  local target_root="${3:?target root required}"
+  local listed normalized member
+  local extracted_count=0
+  declare -A seen=()
+
+  while IFS= read -r listed || [[ -n "${listed}" ]]; do
+    normalize_listed_path normalized "${listed}"
+    [[ -n "${normalized}" ]] || continue
+
+    if [[ -n "${seen[${normalized}]+x}" ]]; then
+      warn "Skipping duplicate chg.txt entry: ${normalized}"
+      continue
+    fi
+    seen["${normalized}"]=1
+
+    resolve_archive_member member "${normalized}"
+    copy_archive_member "${archive}" "${target_root}" "${member}" "${normalized}"
+    ((extracted_count += 1))
+  done < "${change_list}"
+
+  (( extracted_count > 0 )) || fatal_error "No extractable files found in ${change_list}." 2
+  log INFO "Complete: extracted ${extracted_count} selected file(s) into ${target_root}."
+}
+
+extract_all_files() {
+  local archive="${1:?archive required}"
+  local target_root="${2:?target root required}"
+  local member normalized
+  local extracted_count=0
+  declare -A seen=()
+
+  for member in "${ARCHIVE_MEMBERS[@]}"; do
+    [[ "${member}" == */ ]] && continue
+
+    normalize_archive_member normalized "${member}"
+
+    if [[ -n "${seen[${normalized}]+x}" ]]; then
+      fatal_error "Archive contains multiple members for repository path: ${normalized}" 3
+    fi
+    seen["${normalized}"]=1
+
+    copy_archive_member "${archive}" "${target_root}" "${member}" "${normalized}"
+    ((extracted_count += 1))
+  done
+
+  (( extracted_count > 0 )) || fatal_error "Archive contains no extractable files: ${archive}" 3
+  log INFO "Complete: extracted ${extracted_count} file(s) into ${target_root}."
+}
+
+main() {
+  local extract_mode='auto'
+  local archive='' change_list='' target_dir='.' target_root
+  local embedded_change_member=''
+
+  if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
+    usage
+    return 0
+  fi
+
+  if [[ "${1:-}" == '--all' ]]; then
+    extract_mode='all'
+    shift
+    if (( $# < 1 || $# > 2 )); then
+      usage
+      return 2
+    fi
+    archive="${1}"
+    target_dir="${2:-.}"
+  else
+    if (( $# < 1 || $# > 3 )); then
+      usage
+      return 2
+    fi
+
+    archive="${1}"
+    if (( $# >= 2 )); then
+      extract_mode='selected'
+      change_list="${2}"
+      target_dir="${3:-.}"
+    fi
+  fi
+
+  have tar || fatal_error "tar is required." 2
+  have mktemp || fatal_error "mktemp is required." 2
+  have realpath || fatal_error "realpath is required." 2
+
+  [[ -f "${archive}" ]] || fatal_error "Archive not found: ${archive}" 2
+  if [[ "${extract_mode}" == 'selected' ]]; then
+    [[ -f "${change_list}" ]] || fatal_error "Change list not found: ${change_list}" 2
+  fi
+
+  mkdir --parents -- "${target_dir}"
+  target_root="$(realpath --canonicalize-missing -- "${target_dir}")"
+  STAGE_DIR="$(mktemp --directory --tmpdir pm-extract-files-from-tar.XXXXXXXX)"
+
+  mapfile -t ARCHIVE_MEMBERS < <(tar --list --gzip --file "${archive}")
+  (( ${#ARCHIVE_MEMBERS[@]} > 0 )) || fatal_error "Archive is empty: ${archive}" 3
+
+  if [[ "${extract_mode}" == 'auto' ]]; then
+    find_embedded_change_list_member embedded_change_member
+
+    if [[ -n "${embedded_change_member}" ]]; then
+      extract_mode='selected'
+      change_list="$(extract_embedded_change_list "${archive}" "${embedded_change_member}")"
+      log INFO "Using embedded change list: project/chg.txt"
+    elif [[ -f './chg.txt' ]]; then
+      extract_mode='selected'
+      change_list='./chg.txt'
+      log INFO "Using local change list: ./chg.txt"
+    else
+      extract_mode='all'
+    fi
+  fi
+
+  log INFO "Archive:      ${archive}"
+  log INFO "Mode:         ${extract_mode}"
+  if [[ "${extract_mode}" == 'selected' ]]; then
+    log INFO "Change list:  ${change_list}"
+  fi
+  log INFO "Target:       ${target_root}"
+
+  case "${extract_mode}" in
+    selected)
+      extract_selected_files "${archive}" "${change_list}" "${target_root}"
+      ;;
+    all)
+      extract_all_files "${archive}" "${target_root}"
+      ;;
+    *)
+      fatal_error "Unsupported extraction mode: ${extract_mode}" 2
+      ;;
+  esac
+}
+
+main "$@"

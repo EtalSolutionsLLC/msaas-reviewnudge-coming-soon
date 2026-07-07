@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""
+Apply Et al Solutions labels to docker-compose.yml files using YAML parsing.
+
+Behavior:
+- Recursively finds docker-compose.yml files under the current directory,
+  EXCLUDING any that live under a `capture` or `state` subdirectory.
+- For each file:
+  - Adds/merges labels for `db`, `wp`/`wordpress`, and `wpcli` services.
+  - If a service has no `labels`, it will create one.
+  - If `labels` exist (dict or list), it merges/overrides keys without duplicating.
+- Labels are stored as a list of one-key mappings (your preferred style):
+    labels:
+      - com.etalsolutions.service: "${STACK}-db"
+      - ...
+
+Usage:
+  bin/apply-etalsolutions-labels             # all docker-compose.yml files (with exclusions)
+  bin/apply-etalsolutions-labels --limit 2   # only first two eligible files (for testing)
+"""
+
+from pathlib import Path
+import argparse
+import sys
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    print("ERROR: PyYAML is required. Install with: python -m pip install pyyaml", file=sys.stderr)
+    sys.exit(1)
+
+
+DB_LABELS = {
+    "com.etalsolutions.service": "${STACK}-db",
+    "com.etalsolutions.service_tier": "data",
+    "com.etalsolutions.managed_by": "${MANAGED_BY}",
+    "com.etalsolutions.service_lifecycle": "${LIFECYCLE}",
+    "com.etalsolutions.project_id": "${PROJECT_ID}",
+    "com.etalsolutions.stack": "${STACK}",
+    "com.etalsolutions.client": "${CLIENT}",
+    "com.etalsolutions.owner": "${OWNER_ALIAS}",
+    "com.etalsolutions.data_class": "${DATA_CLASS}",
+    "com.etalsolutions.data_lifecycle": "${DATA_LIFECYCLE}",
+}
+
+WP_LABELS = {
+    "com.etalsolutions.service": "${STACK}-wp",
+    "com.etalsolutions.service_tier": "app",
+    "com.etalsolutions.managed_by": "${MANAGED_BY}",
+    "com.etalsolutions.service_lifecycle": "${LIFECYCLE}",
+    "com.etalsolutions.project_id": "${PROJECT_ID}",
+    "com.etalsolutions.stack": "${STACK}",
+    "com.etalsolutions.client": "${CLIENT}",
+    "com.etalsolutions.owner": "${OWNER_ALIAS}",
+    "com.etalsolutions.data_class": "${DATA_CLASS}",
+    "com.etalsolutions.data_lifecycle": "${DATA_LIFECYCLE}",
+}
+
+WPCLI_LABELS = {
+    "com.etalsolutions.service": "${STACK:-}-wpcli",
+    "com.etalsolutions.service_tier": "ephemeral",
+    "com.etalsolutions.managed_by": "${MANAGED_BY}",
+    "com.etalsolutions.service_lifecycle": "ephemeral",
+    "com.etalsolutions.project_id": "${PROJECT_ID}",
+    "com.etalsolutions.stack": "${STACK}",
+    "com.etalsolutions.client": "${CLIENT}",
+    "com.etalsolutions.owner": "${OWNER_ALIAS}",
+    "com.etalsolutions.data_class": "${DATA_CLASS}",
+    "com.etalsolutions.data_lifecycle": "${DATA_LIFECYCLE}",
+}
+
+
+# Preferred output order
+LABEL_ORDER = [
+    "com.etalsolutions.service",
+    "com.etalsolutions.service_tier",
+    "com.etalsolutions.managed_by",
+    "com.etalsolutions.service_lifecycle",
+    "com.etalsolutions.project_id",
+    "com.etalsolutions.stack",
+    "com.etalsolutions.client",
+    "com.etalsolutions.owner",
+    "com.etalsolutions.data_class",
+    "com.etalsolutions.data_lifecycle",
+]
+
+
+def normalize_labels(labels):
+    """
+    Convert any docker-compose labels representation into a dict[str, str].
+
+    Supports:
+      labels:
+        com.foo: bar         # dict form
+      labels:
+        - com.foo=bar        # list of strings
+        - com.bar=baz
+      labels:
+        - com.foo: bar       # list of one-key dicts (preferred style)
+    """
+    mapping = {}
+
+    if labels is None:
+        return mapping
+
+    if isinstance(labels, dict):
+        for k, v in labels.items():
+            mapping[str(k)] = v
+        return mapping
+
+    if isinstance(labels, list):
+        for item in labels:
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    mapping[str(k)] = v
+            elif isinstance(item, str):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    mapping[k] = v
+        return mapping
+
+    # Unknown form; leave it alone (best effort)
+    return mapping
+
+
+def labels_from_map(mapping):
+    """
+    Convert a dict of labels back into the preferred list-of-dicts form,
+    ordered according to LABEL_ORDER, then any extras alphabetically.
+    """
+    ordered = {}
+    for k in LABEL_ORDER:
+        if k in mapping:
+            ordered[k] = mapping[k]
+    for k in sorted(mapping.keys()):
+        if k not in ordered:
+            ordered[k] = mapping[k]
+    return [{k: v} for k, v in ordered.items()]
+
+
+def ensure_labels_for_service(service_obj: dict, new_labels: dict) -> bool:
+    """
+    Merge new_labels into service_obj['labels'].
+
+    Returns True if any change was made, False otherwise.
+    """
+    existing = service_obj.get("labels")
+    mapping = normalize_labels(existing)
+
+    before = dict(mapping)
+    # Merge / override with our canonical labels
+    mapping.update(new_labels)
+
+    if mapping == before:
+        return False  # no change
+
+    service_obj["labels"] = labels_from_map(mapping)
+    return True
+
+
+def process_file(path: Path) -> bool:
+    """Load a docker-compose.yml, update services, and write back if changed."""
+    original_text = path.read_text()
+
+    try:
+        data = yaml.safe_load(original_text)
+    except Exception as e:  # pragma: no cover
+        print(f"[error] {path} (YAML parse failed: {e})")
+        return False
+
+    if not isinstance(data, dict):
+        print(f"[skip] {path} (top-level is not a mapping)")
+        return False
+
+    services = data.get("services")
+    if not isinstance(services, dict):
+        print(f"[skip] {path} (no services mapping)")
+        return False
+
+    changed = False
+
+    # db service
+    if "db" in services and isinstance(services["db"], dict):
+        if ensure_labels_for_service(services["db"], DB_LABELS):
+            changed = True
+
+    # wp / wordpress service
+    for name in ("wp", "wordpress"):
+        svc = services.get(name)
+        if isinstance(svc, dict):
+            if ensure_labels_for_service(svc, WP_LABELS):
+                changed = True
+
+    # wpcli service
+    if "wpcli" in services and isinstance(services["wpcli"], dict):
+        if ensure_labels_for_service(services["wpcli"], WPCLI_LABELS):
+            changed = True
+
+    if not changed:
+        return False
+
+    new_text = yaml.safe_dump(data, sort_keys=False)
+
+    if new_text != original_text:
+        path.write_text(new_text)
+
+    return True
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Apply Et al Solutions label blocks to docker-compose.yml files (YAML-aware)."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit the number of docker-compose.yml files processed (for testing).",
+    )
+    args = parser.parse_args()
+
+    root = Path(".")
+    all_files = sorted(root.rglob("docker-compose.yml"))
+
+    # Exclude any docker-compose.yml that lives under a `capture` or `state` directory
+    compose_files = [
+        p for p in all_files
+        if "capture" not in p.parts and "state" not in p.parts and ".snapshots" not in p.parts
+    ]
+
+    if not compose_files:
+        print("No eligible docker-compose.yml files found (after exclusions).")
+        return
+
+    if args.limit is not None and args.limit >= 0:
+        compose_files = compose_files[: args.limit]
+
+    for path in compose_files:
+        changed = process_file(path)
+        status = "updated" if changed else "ok"
+        print(f"[{status}] {path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+static_site_dir() {
+  printf '%s' "${STATIC_SITE_DIR:-${SITE_DIR:-$PWD}}"
+}
+
+static_build_dir() {
+  printf '%s' "${STATIC_BUILD_DIR:-$(static_site_dir)}"
+}
+
+static_generate_config() {
+  local out="${1:-$(static_build_dir)/config.generated.json}"
+  "${PORTMASON_SHARE}/pm-util-render-env" --json --out "$out" "${ENV_FILE}"
+  log INFO "Generated static browser config: $out"
+}

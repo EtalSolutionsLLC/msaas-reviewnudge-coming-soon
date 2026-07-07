@@ -1,0 +1,2 @@
+NAME                                IMAGE               COMMAND                  SERVICE   CREATED         STATUS         PORTS
+reviewnudge-coming-soon-dev-web-1   nginx:1.27-alpine   "/docker-entrypoint.…"   web       8 minutes ago   Up 8 minutes   80/tcp

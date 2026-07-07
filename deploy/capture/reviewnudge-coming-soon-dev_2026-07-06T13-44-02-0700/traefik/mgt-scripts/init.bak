@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "/usr/local/bin/sys-helpers"
+
+"${SCRIPT_DIR}/bootstrap-ca-and-dashboard"
+
+echo "==> Starting Traefik ..."
+docker compose -f "${SITE_DIR}/docker-compose.yml" up -d
+echo "Traefik is up. Visit: $SITE_URL"

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# pm-health: classic bash health contract coordinator
+# shellcheck shell=bash
+
+set -euo pipefail
+
+pm_health_die() {
+  printf 'pm-health: %s\n' "$*" >&2
+  return 1
+}
+
+pm_health_runtime_from_adapter() {
+  local rac="${1:-${RUNTIME_ADAPTER_CODE:-}}"
+  if [[ -z "$rac" ]]; then
+    pm_health_die "RUNTIME_ADAPTER_CODE is required"
+    return 1
+  fi
+  printf '%s\n' "${rac%%-*}"
+}
+
+pm_health_adapter_path() {
+  local runtime="$1"
+  local base="${PORTMASON_SHARE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+  case "$runtime" in
+    node) printf '%s\n' "${base}/pm-health-node" ;;
+    *)    printf '%s\n' "${base}/pm-health-generic" ;;
+  esac
+}
+
+pm_health_init() {
+  : "${PM_HEALTH_PATH:=/healthz}"
+  : "${PM_READY_PATH:=/readyz}"
+  : "${PM_HEALTH_INTERVAL:=10s}"
+  : "${PM_HEALTH_TIMEOUT:=3s}"
+  : "${PM_HEALTH_RETRIES:=5}"
+  : "${PM_HEALTH_START_PERIOD:=10s}"
+  export PM_HEALTH_PATH PM_READY_PATH PM_HEALTH_INTERVAL PM_HEALTH_TIMEOUT PM_HEALTH_RETRIES PM_HEALTH_START_PERIOD
+}
+
+pm_health_compose_test_json() {
+  pm_health_init
+  local runtime adapter
+  runtime="$(pm_health_runtime_from_adapter "${RUNTIME_ADAPTER_CODE:-}")"
+  adapter="$(pm_health_adapter_path "$runtime")"
+  if [[ ! -x "$adapter" ]]; then
+    pm_health_die "health adapter not executable: $adapter"
+    return 1
+  fi
+  "$adapter" compose-test-json
+}
+
+pm_health_compose_healthcheck() {
+  pm_health_init
+  local test_json
+  test_json="$(pm_health_compose_test_json)"
+  cat <<EOF
+healthcheck:
+  test: ${test_json}
+  interval: ${PM_HEALTH_INTERVAL}
+  timeout: ${PM_HEALTH_TIMEOUT}
+  retries: ${PM_HEALTH_RETRIES}
+  start_period: ${PM_HEALTH_START_PERIOD}
+EOF
+}
+
+pm_health_endpoint_requirements_md() {
+  cat <<'EOF'
+## PM Health Endpoint Contract
+
+- `/healthz`: liveness, no external dependencies.
+- `/readyz`: readiness, may validate database/cache/queue dependencies.
+EOF
+}

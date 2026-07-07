@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PROJECT_ID:?PROJECT_ID is required}"
+REGION="${REGION:-us-central1}"
+AR_LOC="${AR_LOC:-us-central1}"
+AR_REPO="${AR_REPO:-containers}"
+
+echo "== verify ${PROJECT_ID} =="
+ACTIVE="$(gcloud config get-value account 2>/dev/null || true)"
+[[ -n "$ACTIVE" ]] || { echo "ERROR: no active account"; exit 2; }
+
+state="$(gcloud projects describe "${PROJECT_ID}" --format='value(lifecycleState)' 2>/dev/null || true)"
+[[ "$state" == "ACTIVE" ]] || { echo "ERROR: lifecycleState=${state:-<unknown>}"; exit 3; }
+
+billing="$(gcloud beta billing projects describe "${PROJECT_ID}" --format='value(billingEnabled)' || true)"
+[[ "$billing" == "True" || "$billing" == "true" ]] || { echo "ERROR: billing not enabled"; exit 4; }
+
+# APIs
+for api in run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com; do
+  gcloud services list --enabled --project "${PROJECT_ID}" --filter="config.name=${api}" --format='value(config.name)' | grep -q . || { echo "ERROR: API not enabled: ${api}"; exit 5; }
+done
+
+# ADC vs active project
+QUOTA_PROJECT="$(grep -o '"quota_project_id":[^,]*' ~/.config/gcloud/application_default_credentials.json 2>/dev/null | awk -F\" '{print $4}')"
+ACTIVE_PROJECT="$(gcloud config get-value project)"
+[[ "${QUOTA_PROJECT:-}" == "${ACTIVE_PROJECT}" ]] || { echo "ERROR: ADC quota project (${QUOTA_PROJECT:-unset}) != active project (${ACTIVE_PROJECT})"; exit 6; }
+
+# IAM (user needs run.admin and artifactregistry.admin OR owner)
+POL="$(gcloud projects get-iam-policy "${PROJECT_ID}" --format='get(bindings)')"
+echo "$POL" | grep -Eiq "(roles/owner|roles/run.admin).*user:${ACTIVE}" || { echo "ERROR: missing run.admin (or owner) for ${ACTIVE}"; exit 7; }
+echo "$POL" | grep -Eiq "(roles/owner|roles/artifactregistry.admin).*user:${ACTIVE}" || { echo "ERROR: missing artifactregistry.admin (or owner) for ${ACTIVE}"; exit 8; }
+
+# AR repo exists
+gcloud artifacts repositories describe "${AR_REPO}" --location "${AR_LOC}" >/dev/null || { echo "ERROR: AR repo ${AR_REPO} missing in ${AR_LOC}"; exit 9; }
+
+echo "OK."

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
+export CUR_SCRIPT
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+artifacts_dir__prepare() {
+  local d="${1:?}"
+  rm -rf "$d"
+  mkdir -p "$d"
+}
+
+artifacts_id__compute() {
+  # Prefer explicit BUILD_ID, else timestamp + short git sha if available.
+  if [[ -n "${BUILD_ID:-}" ]]; then
+    printf '%s' "${BUILD_ID}"
+    return 0
+  fi
+
+  local ts sha
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  sha="${sha:-nogit}"
+
+  printf '%s-%s' "$ts" "$sha"
+}
+
+artifacts_paths__derive() {
+    : "${GCS_BUCKET:?}"
+    GCS_PREFIX="artifacts"
+
+    ARTIFACTS_LOCAL_DIR="${ARTIFACTS_LOCAL_DIR:-$(pwd -P)/artifacts}"
+    ARTIFACTS_BUILD_ID="$(artifacts_id__compute)"
+    ARTIFACTS_GCS_BASE="gs://${GCS_BUCKET}/${GCS_PREFIX}"
+    ARTIFACTS_GCS_BUILD="${ARTIFACTS_GCS_BASE}/${ARTIFACTS_BUILD_ID}"
+    ARTIFACTS_GCS_CURRENT="${ARTIFACTS_GCS_BASE}/current"
+
+    export GCS_PREFIX GCS_BUCKET ARTIFACTS_LOCAL_DIR ARTIFACTS_BUILD_ID ARTIFACTS_GCS_BASE ARTIFACTS_GCS_BUILD ARTIFACTS_GCS_CURRENT
+}
+
+artifacts_stage__copy_app() {
+  local dest_root="${1:?}"
+  local src="mgt-scripts"
+  local dest="${dest_root}/app"
+
+  [[ -d "$src" ]] || die "Missing directory: ${src}"
+  mkdir -p "$dest"
+  cp -a "${src}/." "$dest/"
+}
+
+artifacts_stage__copy_portmason() {
+    # Usage:
+    #   artifacts_stage__copy_portmason <dest_root> [exclude_pattern...]
+    #
+    # Exclude patterns are rsync-style, relative to the source root:
+    #   "cache/"          (exclude subdir)
+    #   "secrets.env"     (exclude file)
+    #   "*.log"           (exclude glob)
+    #
+    # Example:
+    #   artifacts_stage__copy_portmason "$dest_root" "cache/" "*.tmp" "node_modules/"
+
+    local dest_root="${1:?}"
+    shift || true
+
+    local src="${PORTMASON_SHARE}"
+    local dest="${dest_root}/portmason"
+
+    [[ -d "$src" ]] || die "Missing directory: ${src}"
+    mkdir -p "$dest"
+
+    # -a = archive; -L = copy the symlink targets as real files/dirs
+    local -a rsync_cmd=(rsync -aL --delete)
+
+    # Add excludes (if any)
+    local pat
+    for pat in "$@"; do
+    [[ -n "$pat" ]] || continue
+    rsync_cmd+=(--exclude "$pat")
+    done
+
+    rsync_cmd+=("${src}/" "${dest}/")
+
+    # Optional: log the exact command
+    local _print
+    printf -v _print '%q ' "${rsync_cmd[@]}"
+    log "CMD: ${_print}"
+
+    "${rsync_cmd[@]}"
+}
+
+artifacts_upload__gcs() {
+  local artifact_tgz="${1:?}"
+
+  have gcloud || die "Missing required command: gcloud"
+
+  # Upload immutable build folder
+  log "Uploading build artifacts -> ${ARTIFACTS_GCS_BUILD}/"
+  gcloud storage cp "${artifact_tgz}" "${artifact_tgz}.sha256" "${ARTIFACTS_GCS_BUILD}/" >/dev/null
+
+  # Update current/ pointer (replace)
+  log "Updating current pointer -> ${ARTIFACTS_GCS_CURRENT}/"
+  gcloud storage cp "${artifact_tgz}" "${artifact_tgz}.sha256" "${ARTIFACTS_GCS_CURRENT}/" >/dev/null
+}
+
+artifacts_verify__print() {
+  local artifacts_root="${1:?}"
+  local runtime_tgz="./runtime.tgz"
+
+  log "Local verification:"
+  log "  $(wc -c < "${runtime_tgz}") bytes  sha256=$(cut -d' ' -f1 "${runtime_tgz}.sha256")  ${runtime_tgz}"
+
+  log "Published:"
+  log "  Build ID: ${ARTIFACTS_BUILD_ID}"
+  log "  Build:    ${ARTIFACTS_GCS_BUILD}/"
+  log "  Current:  ${ARTIFACTS_GCS_CURRENT}/"
+}
+
+main() {
+  artifacts_paths__derive
+
+  have cp  || die "Missing required command: cp"
+  have rm  || die "Missing required command: rm"
+  have tar || die "Missing required command: tar"
+  have sha256sum || die "Missing required command: sha256sum"
+
+  log "Preparing local artifacts directory: ${ARTIFACTS_LOCAL_DIR}"
+  artifacts_dir__prepare "${ARTIFACTS_LOCAL_DIR}"
+
+  log "Staging portmason -> ${ARTIFACTS_LOCAL_DIR}/portmason (from /usr/local/share/portmason/bin/)"
+  artifacts_stage__copy_portmason "${ARTIFACTS_LOCAL_DIR}" "archive" "cagent" "*cosign*" "*log" # Exclude archive/, cagent, cosign files, log files
+
+  log "Staging app -> ${ARTIFACTS_LOCAL_DIR}/app (from mgt-scripts/)"
+  artifacts_stage__copy_app "${ARTIFACTS_LOCAL_DIR}"
+
+  log "Packaging tgz builds"
+  runtime_tgz__build "${ARTIFACTS_LOCAL_DIR}"
+
+  log "Publishing to GCS"
+  artifacts_upload__gcs "./runtime.tgz"
+
+  artifacts_verify__print "${ARTIFACTS_LOCAL_DIR}"
+}
+
+runtime_tgz__build() {
+  local artifacts_root="${1:?}"
+
+  local runtime_src_dir="${artifacts_root}"
+
+  [[ -d "$runtime_src_dir" ]] || die "Missing staged dir: $runtime_src_dir"
+
+  # Build outputs in cwd (next to artifacts/), but sourced from artifacts/
+  local runtime_tgz="./runtime.tgz"
+
+  # Ensure expected executables are executable if present
+  [[ -f "${runtime_src_dir}/portmason" ]] && chmod +x "${runtime_src_dir}/portmason" || true
+
+  # runtime.tgz should contain top folders "portmason/" and "app/"
+  tar -C "${runtime_src_dir}" -czf "${runtime_tgz}" .
+
+  sha256sum "${runtime_tgz}" > "${runtime_tgz}.sha256"
+
+  log "Built: ${runtime_tgz}"
+}
+
+main "$@"
