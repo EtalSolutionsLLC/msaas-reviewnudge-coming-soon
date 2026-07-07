@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- LOUD MODE (always) ---
+# export PM_NO_REDIRECT=1
+# export LOG_LEVEL=DEBUG
+# export DEBUG=1
+# export VERBOSE=1
+
+export PS4='+(${BASH_SOURCE##*/}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+export BASH_XTRACEFD=2
+#set -x
+
+trap 'rc=$?;
+  echo >&2 "ERR: rc=$rc at ${BASH_SOURCE##*/}:${LINENO} (last: ${BASH_COMMAND})"
+  echo >&2 "DBG: PWD=$(pwd -P)"
+  echo >&2 "DBG: DEPLOYMENT_ID=${DEPLOYMENT_ID-<unset>}"
+  echo >&2 "DBG: LOG_SERVICE_NAME=${LOG_SERVICE_NAME-<unset>}"
+  echo >&2 "DBG: PORTMASON_SHARE=${PORTMASON_SHARE-<unset>}"
+  exit $rc
+' ERR
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+# shellcheck disable=SC1090
+. "${PORTMASON_SHARE}/pm-helpers" --minimal "$@"
+
+main() {
+      # Be explicit and loud if required vars are missing
+  if [[ -z "${DEPLOYMENT_ID:-}" ]]; then
+    error "DEPLOYMENT_ID is required."
+    exit 2
+  fi
+
+  if [[ -z "${LOG_SERVICE_NAME:-}" ]]; then
+    log "LOG_SERVICE_NAME not set; discovering first Cloud Run service in project=$DEPLOYMENT_ID ..."
+    LOG_SERVICE_NAME="$(gcloud run services list \
+      --project "${DEPLOYMENT_ID}" \
+      --regions REGION\
+      --limit=1 \
+      --format="value(metadata.name)" \
+      2>/dev/null
+    )" || true
+  fi
+
+  if [[ -z "${LOG_SERVICE_NAME:-}" ]]; then
+    error "No Cloud Run service found in project ${DEPLOYMENT_ID}"
+    exit 3
+  fi
+
+  log "Using service: $LOG_SERVICE_NAME"
+
+  local filter
+  filter="resource.type=cloud_run_revision AND resource.labels.service_name=\"${LOG_SERVICE_NAME}\""
+
+  local -a cmd=(
+    gcloud logging read
+    "$filter"
+    --project "${DEPLOYMENT_ID}"
+    --limit "${LOG_ROW_LIMIT}"
+    --format "value(timestamp,severity,textPayload)"
+  )
+
+  log "About to run:"
+  log "${cmd[@]}"
+
+  "${cmd[@]}"
+}
+
+log "Initializing argument parsing ..."
+pm_setup_arg LOG_SERVICE_NAME "-s|--service-name" needs_value export
+pm_setup_arg LOG_ROW_LIMIT "-r|--row-limit" default=100 export
+pm_commit_args "$@"
+
+main "$@"

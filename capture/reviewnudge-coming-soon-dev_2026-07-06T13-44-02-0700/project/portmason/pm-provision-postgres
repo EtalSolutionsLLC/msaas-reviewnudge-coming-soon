@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+if ! declare -F pm_load_generated_environment >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    . "${PORTMASON_SHARE}/pm-helpers-db"
+fi
+
+pm_postgres_psql_admin() {
+    PM_DB_RT_USER="${DB_ADMIN_USER:?DB_ADMIN_USER required}" \
+    PM_DB_RT_PASSWORD="${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD required}" \
+    PM_DB_RT_DATABASE="${DB_ADMIN_DATABASE:-postgres}" \
+        db_rt "$@"
+}
+
+pm_postgres_ensure_role() {
+    log INFO "ensuring application role" \
+        "role=${DB_USER:?DB_USER required}"
+
+    # The application password travels through an inherited environment value,
+    # never a command-line argument. psql imports it into a private variable at
+    # execution time so neither Portmason logs nor process listings expose it.
+    PM_DB_SQL_SECRET="$DB_PASSWORD" \
+        pm_postgres_psql_admin --set=db_user="$DB_USER" --file=- <<'SQL'
+\getenv db_password PM_DB_SQL_SECRET
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') \gexec
+SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password') \gexec
+SQL
+
+    log INFO "application role ready" \
+        "role=$DB_USER"
+}
+
+pm_postgres_ensure_database() {
+    log INFO "ensuring application database" \
+        "database=${DB_NAME:?DB_NAME required}" "owner=$DB_USER"
+
+    # psql variable interpolation and \gexec are client-side features. Feed the
+    # script through --file=- so psql processes them before sending SQL to the
+    # server. Passing the same text through --command sends :'name' verbatim.
+    pm_postgres_psql_admin \
+        --set=db_name="$DB_NAME" \
+        --set=db_user="$DB_USER" \
+        --file=- <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') \gexec
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user') \gexec
+SQL
+
+    log INFO "application database ready" \
+        "database=$DB_NAME" "owner=$DB_USER"
+}
+
+pm_postgres_ensure_extensions() {
+    local extension
+    [[ -n "${DB_EXTENSIONS:-}" ]] || return 0
+
+    IFS=',' read -r -a _pm_extensions <<<"$DB_EXTENSIONS"
+    for extension in "${_pm_extensions[@]}"; do
+        extension="${extension#${extension%%[![:space:]]*}}"
+        extension="${extension%${extension##*[![:space:]]}}"
+        [[ -n "$extension" ]] || continue
+        [[ "$extension" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+            || die "Invalid PostgreSQL extension name: $extension" 2
+        log INFO "ensuring extension" "extension=$extension"
+        PM_DB_RT_USER="$DB_ADMIN_USER" \
+        PM_DB_RT_PASSWORD="$DB_ADMIN_PASSWORD" \
+        PM_DB_RT_DATABASE="$DB_NAME" \
+            db_rt --set=extension="$extension" --file=- <<'SQL'
+SELECT format('CREATE EXTENSION IF NOT EXISTS %I', :'extension') \gexec
+SQL
+        log INFO "extension ready" "extension=$extension"
+    done
+}
+
+pm_postgres_apply_base_grants() {
+    log INFO "applying base ownership and grants" \
+        "database=$DB_NAME" "role=$DB_USER"
+    PM_DB_RT_USER="$DB_ADMIN_USER" \
+    PM_DB_RT_PASSWORD="$DB_ADMIN_PASSWORD" \
+    PM_DB_RT_DATABASE="$DB_NAME" \
+        db_rt --set=db_user="$DB_USER" --file=- <<'SQL'
+SELECT format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO %I', current_database(), :'db_user') \gexec
+SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'db_user') \gexec
+SQL
+    log INFO "base ownership and grants ready" \
+        "database=$DB_NAME" "role=$DB_USER"
+}
+
+pm_provision_db_provider() {
+    # pm-setup loads .env.generated before lifecycle execution. The standalone
+    # command follows the same contract when invoked outside pm-setup.
+    pm_load_generated_environment "pm-provision-postgres"
+
+    [[ "${DB_PROVIDER:-}" == "postgres" ]] \
+        || die "pm-provision-postgres requires DB_PROVIDER=postgres" 2
+
+    : "${DB_NAME:?DB_NAME required}"
+    : "${DB_USER:?DB_USER required}"
+    : "${DB_PASSWORD:?DB_PASSWORD required}"
+    : "${DB_ADMIN_USER:?DB_ADMIN_USER required}"
+    : "${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD required}"
+
+    log INFO "starting provider provisioning" \
+        "platform=${DB_PLATFORM:-}" "database=$DB_NAME" "user=$DB_USER"
+
+    pm_postgres_ensure_role
+    pm_postgres_ensure_database
+    pm_postgres_ensure_extensions
+    pm_postgres_apply_base_grants
+
+    log INFO "provider provisioning complete" \
+        "database=$DB_NAME" "user=$DB_USER"
+}
+
+main() {
+    pm_provision_db_provider "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

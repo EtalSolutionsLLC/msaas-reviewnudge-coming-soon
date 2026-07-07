@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+repo_root="$(cd -- "${repo_root}" && pwd -P)"
+target="${repo_root}/ops/portmason/pm-version"
+
+[[ -f "${target}" ]] || {
+  printf 'ERROR: pm-version not found: %s\n' "${target}" >&2
+  exit 2
+}
+
+python3 - "${target}" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+old = '. "${PORTMASON_SHARE}/pm-helpers" --minimal'
+new = '. "${PORTMASON_SHARE}/pm-helpers" --minimal >&2'
+
+if new in text:
+    print("pm-version already redirects helper bootstrap output to stderr")
+    raise SystemExit(0)
+
+count = text.count(old)
+if count != 1:
+    raise SystemExit(
+        f"expected exactly one minimal-bootstrap source line in {path}; found {count}"
+    )
+
+updated = text.replace(old, new, 1)
+mode = stat.S_IMODE(path.stat().st_mode)
+
+fd, temporary_name = tempfile.mkstemp(
+    prefix=path.name + ".",
+    dir=str(path.parent),
+)
+try:
+    os.fchmod(fd, mode)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        handle.write(updated)
+    os.replace(temporary_name, path)
+    os.chmod(path, mode)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+
+print("updated pm-version source-time output routing")
+PY
+
+bash -n "${target}"

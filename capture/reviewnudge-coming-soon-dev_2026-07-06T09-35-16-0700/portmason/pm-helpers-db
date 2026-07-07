@@ -1,0 +1,847 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Portmason database lifecycle and Compose-contract helpers.
+#
+# This module owns selectors, module discovery, Compose service-role discovery,
+# aggregate preflight validation, and lifecycle coordination. Provider,
+# platform, and provider-platform behavior remains in independently replaceable
+# pm-helpers-*, pm-provision-*, pm-deploy-*, and pm-db-bridge-* modules.
+
+if ! declare -F log >/dev/null 2>&1; then
+    printf 'ERROR: pm-helpers-db must be sourced after pm-helpers.\n' >&2
+    return 2 2>/dev/null || exit 2
+fi
+
+if [[ "${__PM_HELPERS_DB_LOADED:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+__PM_HELPERS_DB_LOADED=1
+export __PM_HELPERS_DB_LOADED
+
+declare -gA PM_DB_LOADED_MODULES=()
+declare -ga PM_PREFLIGHT_ERRORS=()
+declare -ga PM_PREFLIGHT_WARNINGS=()
+declare -ga PM_COMPOSE_CMD=()
+declare -g PM_COMPOSE_MODEL_JSON=""
+
+PM_CANONICAL_RUNTIME_SECRET_KEYS=(
+    DB_USER
+    DB_PASSWORD
+    DB_ADMIN_USER
+    DB_ADMIN_PASSWORD
+    DATABASE_URL
+    DATABASE_DIRECT_URL
+    APP_ADMIN_USER
+    APP_ADMIN_PASSWORD
+    APP_SECRET
+    SESSION_SECRET
+    COOKIE_SECRET
+    JWT_SECRET
+    CHECKOUT_TOKEN_KEY
+    BILLING_EVENT_SECRET
+    REVIEW_PROVIDER_EVENT_SECRET
+    BULKEMAILER_API_KEY
+    SMTP_PASS
+    TURNSTILE_SECRET_KEY
+    ABUSE_IDENTIFIER_SALT
+    QUEUE_USER
+    QUEUE_PASSWORD
+    CACHE_PASSWORD
+)
+
+# Canonical control-plane credentials are recognized and protected by
+# Portmason, but they are never injected into application runtime services.
+# Provider/platform modules map these purpose-based names to their concrete
+# implementation APIs.
+PM_CANONICAL_CONTROL_PLANE_SECRET_KEYS=(
+    DB_API_KEY
+    RUNTIME_API_KEY
+    DNS_API_KEY
+    STORAGE_API_KEY
+    EMAIL_API_KEY
+    BILLING_API_KEY
+)
+
+PM_CANONICAL_SECRET_KEYS=(
+    "${PM_CANONICAL_RUNTIME_SECRET_KEYS[@]}"
+    "${PM_CANONICAL_CONTROL_PLANE_SECRET_KEYS[@]}"
+)
+
+declare -gA PM_DEPRECATED_SECRET_ALIASES=(
+    [NEON_API_KEY]=DB_API_KEY
+)
+
+PM_PUBLIC_KEY_LIKE_KEYS=(
+    TURNSTILE_SITE_KEY
+)
+
+pm_csv_contains() {
+    local csv="${1:-}"
+    local wanted="${2:-}"
+    local item
+    IFS=',' read -r -a _pm_csv_items <<<"$csv"
+    for item in "${_pm_csv_items[@]}"; do
+        item="${item#${item%%[![:space:]]*}}"
+        item="${item%${item##*[![:space:]]}}"
+        [[ "$item" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+pm_array_contains() {
+    local wanted="${1:?value required}"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+pm_db_has_configuration() {
+    [[ -n "${DB_PROVIDER_PLATFORM_CODE:-}" \
+        || -n "${DB_PROVIDER_CODE:-}" \
+        || -n "${DB_PLATFORM_CODE:-}" \
+        || -n "${DATABASE_URL:-}" \
+        || -n "${DB_HOST:-}" \
+        || -n "${DB_NAME:-}" \
+        || -n "${DB_USER:-}" ]]
+}
+
+pm_db_refresh_selectors() {
+    local code="${DB_PROVIDER_PLATFORM_CODE:-}"
+    local configured_provider="${DB_PROVIDER_CODE:-}"
+    local configured_platform="${DB_PLATFORM_CODE:-}"
+    local provider=""
+    local platform=""
+
+    [[ -n "$code" ]] || return 1
+
+    if [[ "$code" == *-* ]]; then
+        provider="${code%%-*}"
+        platform="${code#*-}"
+    else
+        # Preserve the raw selector for aggregate preflight reporting without
+        # inventing a platform or attempting to load a nonsense module name.
+        provider="$code"
+    fi
+
+    if [[ -n "$configured_provider" && "$configured_provider" != "$provider" ]]; then
+        die "DB_PROVIDER_CODE conflicts with DB_PROVIDER_PLATFORM_CODE: configured=$configured_provider derived=$provider" 2
+        return 2
+    fi
+    if [[ -n "$configured_platform" && "$configured_platform" != "$platform" ]]; then
+        die "DB_PLATFORM_CODE conflicts with DB_PROVIDER_PLATFORM_CODE: configured=$configured_platform derived=$platform" 2
+        return 2
+    fi
+
+    env_init_set DB_PROVIDER_PLATFORM_CODE "$code"
+    env_init_set DB_PROVIDER_CODE "$provider"
+    env_init_set DB_PLATFORM_CODE "$platform"
+
+    log DEBUG "pm-db: refreshed selectors" \
+        "code=$DB_PROVIDER_PLATFORM_CODE" \
+        "provider=$DB_PROVIDER_CODE" \
+        "platform=$DB_PLATFORM_CODE"
+}
+
+pm_db_validate_selector() {
+    local code="${DB_PROVIDER_PLATFORM_CODE:-}"
+    [[ -n "$code" ]] || {
+        pm_preflight_error "database.selector" "DB_PROVIDER_PLATFORM_CODE" \
+            "required when a database service or DB_PROVIDER_CODE is declared"
+        return 0
+    }
+
+    if [[ ! "$code" =~ ^[a-z0-9][a-z0-9-]*-[a-z0-9][a-z0-9-]*$ ]]; then
+        pm_preflight_error "database.selector" "DB_PROVIDER_PLATFORM_CODE" \
+            "must use <provider>-<platform>; received '$code'"
+        return 0
+    fi
+
+    local provider="${code%%-*}"
+    local platform="${code#*-}"
+    [[ -n "$provider" ]] || pm_preflight_error "database.selector" "DB_PROVIDER_CODE" \
+        "could not be derived from '$code'"
+    [[ -n "$platform" ]] || pm_preflight_error "database.selector" "DB_PLATFORM_CODE" \
+        "could not be derived from '$code'"
+}
+
+pm_db_resolve_module() {
+    local out_var="${1:?output variable required}"
+    local module_name="${2:?module name required}"
+    local resolved=""
+
+    if [[ -r "${SCRIPT_DIR}/${module_name}" ]]; then
+        resolved="${SCRIPT_DIR}/${module_name}"
+    elif [[ -r "${PORTMASON_SHARE}/${module_name}" ]]; then
+        resolved="${PORTMASON_SHARE}/${module_name}"
+    fi
+
+    printf -v "$out_var" '%s' "$resolved"
+}
+
+pm_db_mark_module_loaded() {
+    local module_name="${1:?module name required}"
+    PM_DB_LOADED_MODULES["$module_name"]=1
+}
+
+pm_db_source_module_once() {
+    local module_name="${1:?module name required}"
+    local requirement="${2:-required}"
+    local module_file=""
+
+    [[ -z "${PM_DB_LOADED_MODULES[$module_name]+x}" ]] || return 0
+
+    pm_db_resolve_module module_file "$module_name"
+    if [[ -z "$module_file" ]]; then
+        if [[ "$requirement" == "required" ]]; then
+            die "Required Portmason module not found: $module_name" 2
+        fi
+        log DEBUG "pm-db: optional module not found" "module=$module_name"
+        return 1
+    fi
+
+    log INFO "pm-db: loading module" "module=$module_name" "path=$module_file"
+    # shellcheck disable=SC1090
+    . "$module_file"
+    pm_db_mark_module_loaded "$module_name"
+}
+
+pm_db_call_required() {
+    local function_name="${1:?function name required}"
+    shift
+
+    declare -F "$function_name" >/dev/null 2>&1 \
+        || die "Required database lifecycle entrypoint is not defined: $function_name" 2
+
+    log INFO "pm-db: starting lifecycle entrypoint" "entrypoint=$function_name"
+    "$function_name" "$@"
+    log INFO "pm-db: completed lifecycle entrypoint" "entrypoint=$function_name"
+}
+
+pm_db_call_optional() {
+    local function_name="${1:?function name required}"
+    shift
+
+    declare -F "$function_name" >/dev/null 2>&1 || return 0
+    log INFO "pm-db: starting optional entrypoint" "entrypoint=$function_name"
+    "$function_name" "$@"
+    log INFO "pm-db: completed optional entrypoint" "entrypoint=$function_name"
+}
+
+pm_db_bootstrap_helpers() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors || return 0
+
+    pm_db_source_module_once "pm-helpers-${DB_PROVIDER_CODE}" optional || true
+    pm_db_call_optional pm_db_provider_prepare
+}
+
+pm_db_load_helpers() {
+    local mode="${1:-required}"
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors || return 0
+
+    if [[ ! "${DB_PROVIDER_PLATFORM_CODE:-}" =~ ^[a-z0-9][a-z0-9-]*-[a-z0-9][a-z0-9-]*$ ]]; then
+        [[ "$mode" == "preflight" ]] && return 0
+        die "Invalid DB_PROVIDER_PLATFORM_CODE: ${DB_PROVIDER_PLATFORM_CODE:-<unset>}" 2
+    fi
+
+    local requirement="required"
+    [[ "$mode" == "preflight" ]] && requirement="optional"
+
+    pm_db_call_optional pm_db_provider_prepare
+}
+
+pm_db_preflight_lifecycle_modules() {
+    [[ "${DB_PROVIDER_PLATFORM_CODE:-}" =~ ^[a-z0-9][a-z0-9-]*-[a-z0-9][a-z0-9-]*$ ]] || return 0
+
+    local -a modules=(
+        "pm-provision-${DB_PLATFORM_CODE}"
+        "pm-deploy-${DB_PLATFORM_CODE}"
+        "pm-provision-${DB_PROVIDER_CODE}"
+        "pm-deploy-${DB_PROVIDER_CODE}"
+    )
+    local module module_path
+    for module in "${modules[@]}"; do
+        module_path=""
+        pm_db_resolve_module module_path "$module"
+        [[ -n "$module_path" ]] || pm_preflight_error             "database.module" "$module"             "required database lifecycle module is missing"
+    done
+}
+pm_db_run_provision() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors
+
+    pm_db_source_module_once "pm-provision-${DB_PLATFORM_CODE}" required
+    pm_db_call_required pm_provision_db_platform "$@"
+
+    pm_db_call_required pm_db_bridge_provision "$@"
+
+    pm_db_source_module_once "pm-provision-${DB_PROVIDER_CODE}" required
+    pm_db_call_required pm_provision_db_provider "$@"
+}
+
+pm_db_run_deploy() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors
+
+    pm_db_source_module_once "pm-deploy-${DB_PLATFORM_CODE}" required
+    pm_db_call_required pm_deploy_db_platform "$@"
+
+    pm_db_call_required pm_db_bridge_deploy "$@"
+
+    pm_db_source_module_once "pm-deploy-${DB_PROVIDER_CODE}" required
+    pm_db_call_required pm_deploy_db_provider "$@"
+}
+
+pm_compose_init_command() {
+    local compose_file="${PM_COMPOSE_FILE:-${SCRIPT_DIR}/docker-compose.yml}"
+    local override_file="${PM_COMPOSE_OVERRIDE_FILE:-${SCRIPT_DIR}/docker-compose.override.yml}"
+
+    PM_COMPOSE_CMD=(docker compose -f "$compose_file")
+    [[ -f "$override_file" ]] && PM_COMPOSE_CMD+=(-f "$override_file")
+
+    log DEBUG "pm-compose: initialized command" \
+        "compose_file=$compose_file" \
+        "override=$([[ -f "$override_file" ]] && printf yes || printf no)"
+}
+
+pm_compose_render_json() {
+    [[ ${#PM_COMPOSE_CMD[@]} -gt 0 ]] || pm_compose_init_command
+    "${PM_COMPOSE_CMD[@]}" config --format json
+}
+
+pm_compose_render_failure_message() {
+    local output="${1:-}"
+    local max_lines="${2:-20}"
+
+    if [[ -z "$output" ]]; then
+        printf 'docker compose config failed without diagnostic output'
+        return 0
+    fi
+
+    output="$(printf '%s\n' "$output" \
+        | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' \
+        | sed -E 's/(token|secret|password|pass|key):[[:space:]]*[^[:space:]]+/\1: ***REDACTED***/g' \
+        | tail -n "$max_lines")"
+
+    printf '%s' "$output"
+}
+
+pm_compose_load_model() {
+    if [[ -n "${PM_COMPOSE_MODEL_JSON:-}" ]]; then
+        return 0
+    fi
+
+    have docker || {
+        pm_preflight_error "compose.tooling" "docker" "Docker with Compose v2 is required"
+        return 1
+    }
+    have jq || {
+        pm_preflight_error "compose.tooling" "jq" "jq is required to inspect the Compose model"
+        return 1
+    }
+
+    pm_compose_init_command
+    local compose_render_output compose_render_rc compose_render_detail
+    compose_render_output="$(pm_compose_render_json 2>&1)" || compose_render_rc=$?
+    if [[ -n "${compose_render_rc:-}" ]]; then
+        PM_COMPOSE_MODEL_JSON=""
+        compose_render_detail="$(pm_compose_render_failure_message "$compose_render_output")"
+        pm_preflight_error "compose.model" "docker-compose.yml" \
+            "could not be rendered by: ${PM_COMPOSE_CMD[*]} config --format json; ${compose_render_detail}"
+        return 1
+    fi
+    PM_COMPOSE_MODEL_JSON="$compose_render_output"
+    export PM_COMPOSE_MODEL_JSON
+
+    if ! jq -e '.services and (.services | type == "object")' >/dev/null 2>&1 \
+        <<<"$PM_COMPOSE_MODEL_JSON"; then
+        pm_preflight_error "compose.model" "services" "rendered Compose model has no services object"
+        return 1
+    fi
+
+    PROJECT_SERVICES="$(
+        jq -c '
+            def role($name; $svc):
+                (($svc.labels // {})["solutions.etal.service"] // $name)
+                | ascii_downcase;
+            .services
+            | to_entries
+            | map({
+                service: .key,
+                role: role(.key; .value),
+                image: (.value.image // ""),
+                has_build: (.value.build != null),
+                command: (.value.command // []),
+                entrypoint: (.value.entrypoint // []),
+                depends_on: ((.value.depends_on // {}) | keys)
+              })
+        ' <<<"$PM_COMPOSE_MODEL_JSON"
+    )"
+    export PROJECT_SERVICES
+
+    log INFO "pm-compose: discovered project services" \
+        "count=$(jq 'length' <<<"$PROJECT_SERVICES")" \
+        "roles=$(jq -r 'map(.role) | unique | join(",")' <<<"$PROJECT_SERVICES")"
+}
+
+pm_compose_role_exists() {
+    local role="${1:?role required}"
+    [[ -n "${PROJECT_SERVICES:-}" ]] || return 1
+    jq -e --arg role "$role" 'any(.[]; .role == $role)' >/dev/null 2>&1 \
+        <<<"$PROJECT_SERVICES"
+}
+
+pm_compose_service_for_role() {
+    local role="${1:?role required}"
+    [[ -n "${PROJECT_SERVICES:-}" ]] || return 1
+    jq -r --arg role "$role" '.[] | select(.role == $role) | .service' \
+        <<<"$PROJECT_SERVICES" | head -n 1
+}
+
+pm_compose_role_for_service() {
+    local service="${1:?service required}"
+    jq -r --arg service "$service" '.[] | select(.service == $service) | .role' \
+        <<<"${PROJECT_SERVICES:-[]}" | head -n 1
+}
+
+pm_compose_deployable_services_tsv() {
+    jq -r '.[]
+        | select(.role != "db" and .role != "cache" and .role != "log-init")
+        | select(.has_build or (.image | length > 0))
+        | [.service, .role, .image, (.has_build | tostring)]
+        | @tsv' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+pm_preflight_reset() {
+    PM_PREFLIGHT_ERRORS=()
+    PM_PREFLIGHT_WARNINGS=()
+}
+
+pm_preflight_error() {
+    local category="${1:?category required}"
+    local key="${2:?key required}"
+    local message="${3:?message required}"
+    PM_PREFLIGHT_ERRORS+=("${category}|${key}|${message}")
+}
+
+pm_preflight_warning() {
+    local category="${1:?category required}"
+    local key="${2:?key required}"
+    local message="${3:?message required}"
+    PM_PREFLIGHT_WARNINGS+=("${category}|${key}|${message}")
+}
+
+pm_preflight_require_var() {
+    local category="${1:?category required}"
+    local key="${2:?key required}"
+    local message="${3:-required}"
+    [[ -n "${!key:-}" ]] || pm_preflight_error "$category" "$key" "$message"
+}
+
+pm_preflight_has_secret_override() {
+    local key="${1:?key required}"
+    local line ref
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" && "$line" == *"|"* ]] || continue
+        ref="${line%%|*}"
+        [[ "$ref" == "$key" ]] && return 0
+    done <<<"${SECRET_PATHS:-}"
+    return 1
+}
+
+pm_preflight_secret_is_configured() {
+    local key="${1:?key required}"
+    [[ -n "${!key:-}" ]] || pm_preflight_has_secret_override "$key"
+}
+
+pm_preflight_require_secret() {
+    local category="${1:?category required}"
+    local key="${2:?key required}"
+    local message="${3:-required secret}"
+    pm_preflight_secret_is_configured "$key" && return 0
+    pm_preflight_error "$category" "$key" "$message"
+}
+
+pm_preflight_require_secret_with_alias() {
+    local category="${1:?category required}"
+    local canonical_key="${2:?canonical key required}"
+    local alias_key="${3:?alias key required}"
+    local message="${4:-required secret}"
+    if pm_preflight_secret_is_configured "$canonical_key" \
+        || pm_preflight_secret_is_configured "$alias_key"; then
+        return 0
+    fi
+    pm_preflight_error "$category" "$canonical_key" "$message"
+}
+
+pm_secret_key_is_canonical() {
+    local key="${1:?key required}"
+    pm_array_contains "$key" "${PM_CANONICAL_SECRET_KEYS[@]}"
+}
+
+pm_secret_key_is_deprecated_alias() {
+    local key="${1:?key required}"
+    [[ -n "${PM_DEPRECATED_SECRET_ALIASES[$key]+x}" ]]
+}
+
+pm_secret_key_is_public_exception() {
+    local key="${1:?key required}"
+    pm_array_contains "$key" "${PM_PUBLIC_KEY_LIKE_KEYS[@]}"
+}
+
+pm_secret_key_is_registered() {
+    local key="${1:?key required}"
+    pm_secret_key_is_canonical "$key" \
+        || pm_secret_key_is_deprecated_alias "$key" \
+        || pm_csv_contains "${PM_ADDITIONAL_SECRET_KEYS:-}" "$key"
+}
+
+pm_load_generated_environment() {
+    local caller="${1:-Portmason}"
+    local mode="${2:-once}"
+    local base="${ENV_FILE:-${SCRIPT_DIR:-${PROJECT_ROOT:-$PWD}}/.env}"
+    local file="${base}.generated"
+    local resolved=""
+
+    if [[ ! -r "$file" ]]; then
+        log DEBUG "${caller}: generated environment is not readable; continuing with current process values" \
+            "file=$file"
+        return 0
+    fi
+
+    resolved="$(realpath -- "$file" 2>/dev/null || printf '%s' "$file")"
+    if [[ "$mode" != force \
+        && "${PM_GENERATED_ENV_FILE_LOADED:-}" == "$resolved" ]]; then
+        log DEBUG "${caller}: generated environment already loaded" \
+            "file=$file"
+        return 0
+    fi
+
+    log INFO "${caller}: loading fully interpolated generated environment" \
+        "file=$file"
+    set -a
+    # shellcheck disable=SC1090
+    . "$file"
+    set +a
+
+    PM_GENERATED_ENV_FILE_LOADED="$resolved"
+    export PM_GENERATED_ENV_FILE_LOADED
+    log INFO "${caller}: generated environment loaded" \
+        "file=$file"
+}
+
+pm_env_generated_keys() {
+    local file="${ENV_FILE:-${SCRIPT_DIR}/.env}.generated"
+    [[ -r "$file" ]] || return 0
+    awk '
+        /^[A-Za-z_][A-Za-z0-9_]*=/ {
+            key=$0
+            sub(/=.*/, "", key)
+            print key
+        }
+    ' "$file"
+}
+
+pm_validate_secret_registry() {
+    local key
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        case "$key" in
+            *_PASSWORD|*_PASS|*_TOKEN|*_SECRET|*_KEY|DATABASE_URL|DATABASE_DIRECT_URL|DB_USER|DB_ADMIN_USER|QUEUE_USER)
+                if ! pm_secret_key_is_registered "$key" \
+                    && ! pm_secret_key_is_public_exception "$key"; then
+                    pm_preflight_error "secret.registry" "$key" \
+                        "looks secret but is not in the canonical service contract; add it to PM_ADDITIONAL_SECRET_KEYS or a Portmason contract"
+                fi
+                ;;
+        esac
+    done < <(pm_env_generated_keys)
+}
+
+pm_validate_deprecated_secret_aliases() {
+    local alias_key canonical_key
+    local alias_configured canonical_configured
+
+    for alias_key in "${!PM_DEPRECATED_SECRET_ALIASES[@]}"; do
+        canonical_key="${PM_DEPRECATED_SECRET_ALIASES[$alias_key]}"
+        alias_configured=0
+        canonical_configured=0
+        pm_preflight_secret_is_configured "$alias_key" && alias_configured=1
+        pm_preflight_secret_is_configured "$canonical_key" && canonical_configured=1
+
+        if (( alias_configured && canonical_configured )); then
+            pm_preflight_error "secret.alias" "$alias_key" \
+                "duplicates canonical $canonical_key; remove $alias_key"
+        elif (( alias_configured )); then
+            pm_preflight_warning "secret.alias" "$alias_key" \
+                "is deprecated; use $canonical_key. The alias is accepted for one transition cycle and is mapped only in memory"
+        fi
+    done
+}
+
+pm_validate_secret_quality() {
+    local key value
+    local -a quality_keys=(
+        "${PM_CANONICAL_SECRET_KEYS[@]}"
+        "${!PM_DEPRECATED_SECRET_ALIASES[@]}"
+    )
+    for key in "${quality_keys[@]}"; do
+        value="${!key:-}"
+        [[ -n "$value" ]] || continue
+        case "${value,,}" in
+            *replace-with*|*changeme*|*change-this*|*example*|*dev_password*|*dev-password*)
+                [[ "${DEPLOY_ENV:-dev}" == "dev" ]] || \
+                    pm_preflight_error "secret.quality" "$key" \
+                        "contains a development or placeholder value"
+                ;;
+        esac
+    done
+}
+
+pm_runtime_validate_selector() {
+    local code="${RUNTIME_ADAPTER_CODE:-}"
+    if [[ -z "$code" ]]; then
+        pm_preflight_error "runtime.selector" "RUNTIME_ADAPTER_CODE"             "runtime/adapter selector is required"
+        return 0
+    fi
+    if [[ ! "$code" =~ ^[a-z0-9][a-z0-9+]*-[a-z0-9][a-z0-9-]*$ ]]; then
+        pm_preflight_error "runtime.selector" "RUNTIME_ADAPTER_CODE"             "must use <runtime>-<adapter>; received '$code'"
+    fi
+}
+
+pm_db_preflight() {
+    pm_preflight_reset
+    log INFO "pm-preflight: starting aggregate configuration validation"
+
+    pm_preflight_require_var "project" "APP_SLUG" "application identity is required"
+    [[ -v DEPLOY_ENV ]] || pm_preflight_error "project" "DEPLOY_ENV" \
+        "must be defined; empty or prd represents production"
+    pm_runtime_validate_selector
+    pm_preflight_require_var "project" "STACK" "stack identity is required"
+
+    pm_compose_load_model || true
+
+    if pm_compose_role_exists db || pm_db_has_configuration; then
+        pm_db_refresh_selectors || true
+        pm_db_validate_selector
+        pm_db_load_helpers preflight
+        pm_db_preflight_lifecycle_modules
+        pm_preflight_require_var "database.contract" "DB_NAME" "database name is required"
+        pm_preflight_require_secret "database.contract" "DB_USER" "database application user is required"
+        pm_preflight_require_secret "database.contract" "DB_PASSWORD" "database application password is required"
+
+        if [[ -n "${DB_PORT:-}" ]]; then
+            if [[ ! "$DB_PORT" =~ ^[0-9]+$ ]] || (( DB_PORT < 1 || DB_PORT > 65535 )); then
+                pm_preflight_error "database.contract" "DB_PORT" \
+                    "must be an integer between 1 and 65535"
+            fi
+        fi
+
+        [[ "${DB_PROVIDER_CODE:-}" != "postgres" || -z "${PM_DB_POSTGRES_PARSE_ERROR:-}" ]] \
+            || pm_preflight_error "database.url" "DATABASE_URL" "$PM_DB_POSTGRES_PARSE_ERROR"
+    fi
+
+    if [[ "${DB_PLATFORM_CODE:-}" == "gcp" || "${ADAPTER_CODE:-}" == "gcp" ]]; then
+        pm_preflight_require_var "gcp" "DEPLOYMENT_ID" "GCP project ID is required"
+        pm_preflight_require_var "gcp" "REGION" "GCP region is required"
+    fi
+
+    if [[ "${MESSAGE_TRANSPORT:-}" == "bulkemailer" \
+        && "${BULKEMAILER_PROVIDER:-}" == "resend" ]]; then
+        pm_preflight_require_secret "service.web" "BULKEMAILER_API_KEY" \
+            "required when MESSAGE_TRANSPORT=bulkemailer and BULKEMAILER_PROVIDER=resend"
+    fi
+
+    case "${TURNSTILE_ENABLED:-false}" in
+        1|true|TRUE|yes|YES|on|ON)
+            pm_preflight_require_secret "service.web" "TURNSTILE_SECRET_KEY" \
+                "required when TURNSTILE_ENABLED=true"
+            ;;
+    esac
+
+    local required_key
+    IFS=',' read -r -a _pm_required_keys <<<"${PM_REQUIRED_SECRET_KEYS:-}"
+    for required_key in "${_pm_required_keys[@]}"; do
+        required_key="${required_key#${required_key%%[![:space:]]*}}"
+        required_key="${required_key%${required_key##*[![:space:]]}}"
+        [[ -n "$required_key" ]] || continue
+        pm_preflight_require_secret "secret.required" "$required_key" \
+            "listed in PM_REQUIRED_SECRET_KEYS"
+    done
+
+    pm_validate_secret_registry
+    pm_validate_deprecated_secret_aliases
+    pm_validate_secret_quality
+
+    # Provider, platform, and bridge modules append all implementation-specific
+    # findings to the same aggregate report. They MUST NOT fail independently.
+    pm_db_call_optional pm_db_provider_preflight
+    pm_db_call_optional pm_db_platform_preflight
+    pm_db_call_optional pm_db_bridge_preflight
+
+    local db_count
+    db_count="$(jq '[.[] | select(.role == "db")] | length' \
+        <<<"${PROJECT_SERVICES:-[]}" 2>/dev/null || printf 0)"
+    (( db_count <= 1 )) || pm_preflight_error "compose.roles" "db" \
+        "only one canonical db service is supported; found $db_count"
+
+    local item category key message
+    if (( ${#PM_PREFLIGHT_WARNINGS[@]} > 0 )); then
+        log WARN "pm-preflight: configuration warnings" \
+            "count=${#PM_PREFLIGHT_WARNINGS[@]}"
+        for item in "${PM_PREFLIGHT_WARNINGS[@]}"; do
+            IFS='|' read -r category key message <<<"$item"
+            log WARN "pm-preflight: [$category] $key: $message"
+        done
+    fi
+
+    if (( ${#PM_PREFLIGHT_ERRORS[@]} > 0 )); then
+        log ERROR "pm-preflight: configuration validation failed" \
+            "errors=${#PM_PREFLIGHT_ERRORS[@]}"
+        for item in "${PM_PREFLIGHT_ERRORS[@]}"; do
+            IFS='|' read -r category key message <<<"$item"
+            log ERROR "pm-preflight: [$category] $key: $message"
+        done
+        log ERROR "pm-preflight: no provisioning or deployment actions were started"
+        return 2
+    fi
+
+    log INFO "pm-preflight: configuration validation passed" \
+        "services=$(jq 'length' <<<"${PROJECT_SERVICES:-[]}" 2>/dev/null || printf 0)"
+}
+
+pm_service_secret_keys() {
+    local role="${1:?service role required}"
+    case "$role" in
+        db)
+            printf '%s\n' DB_USER DB_PASSWORD DB_ADMIN_USER DB_ADMIN_PASSWORD DATABASE_URL DATABASE_DIRECT_URL
+            ;;
+        web|app|jobs|worker)
+            printf '%s\n' \
+                DB_USER DB_PASSWORD DATABASE_URL DATABASE_DIRECT_URL \
+                APP_ADMIN_USER APP_ADMIN_PASSWORD APP_SECRET SESSION_SECRET \
+                COOKIE_SECRET JWT_SECRET CHECKOUT_TOKEN_KEY BILLING_EVENT_SECRET \
+                REVIEW_PROVIDER_EVENT_SECRET BULKEMAILER_API_KEY SMTP_PASS \
+                TURNSTILE_SECRET_KEY ABUSE_IDENTIFIER_SALT QUEUE_USER QUEUE_PASSWORD
+            ;;
+        cache)
+            printf '%s\n' CACHE_PASSWORD
+            ;;
+    esac
+
+    local extra
+    IFS=',' read -r -a _pm_extra_secret_keys <<<"${PM_ADDITIONAL_SECRET_KEYS:-}"
+    for extra in "${_pm_extra_secret_keys[@]}"; do
+        extra="${extra#${extra%%[![:space:]]*}}"
+        extra="${extra%${extra##*[![:space:]]}}"
+        [[ -n "$extra" ]] && printf '%s\n' "$extra"
+    done
+}
+
+pm_current_or_generated_value() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local result=""
+    local file="${ENV_FILE:-${SCRIPT_DIR}/.env}.generated"
+
+    if [[ -v "$key" ]]; then
+        result="${!key}"
+    elif [[ -r "$file" ]]; then
+        result="$(awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file")"
+    fi
+    printf -v "$out_var" '%s' "$result"
+}
+
+pm_service_secret_kv_nul() {
+    local role="${1:?service role required}"
+    local key value
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        pm_current_or_generated_value value "$key"
+        if [[ -n "$value" ]] || pm_preflight_has_secret_override "$key"; then
+            printf '%s\0%s\0' "$key" "$value"
+        fi
+    done < <(pm_service_secret_keys "$role" | awk '!seen[$0]++')
+}
+
+pm_service_nonsecret_kv_nul() {
+    local role="${1:?service role required}"
+    local file="${ENV_FILE:-${SCRIPT_DIR}/.env}.generated"
+    local key value
+    declare -A emitted=()
+
+    for key in DB_HOST DB_PORT DB_NAME DB_PROVIDER_CODE DB_PLATFORM_CODE DB_PROVIDER_PLATFORM_CODE DATABASE_SSL_MODE; do
+        if [[ -v "$key" && -n "${!key}" ]] && ! pm_secret_key_is_canonical "$key"; then
+            printf '%s\0%s\0' "$key" "${!key}"
+            emitted["$key"]=1
+        fi
+    done
+
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r -d '' key; do
+        IFS= read -r -d '' value || value=""
+        [[ -z "${emitted[$key]+x}" ]] || continue
+        pm_secret_key_is_registered "$key" && continue
+        case "$key" in
+            ENV_FILE|SECRET_PATHS|PM_REQUIRED_SECRET_KEYS|PM_ADDITIONAL_SECRET_KEYS|DEBUG|VERBOSE|PM_ENTRY_SCRIPT|PATH|HOME|PWD|OLDPWD|SHELL|SHLVL|USER|LOGNAME|LANG|LANGUAGE|LC_*|TERM|XDG_*|PORT)
+                continue
+                ;;
+        esac
+        printf '%s\0%s\0' "$key" "$value"
+    done < <(env_file_to_kv_nul "$file")
+}
+
+pm_generated_env_upsert() {
+    local key="${1:?key required}"
+    local value="${2-}"
+    local file="${ENV_FILE:-${SCRIPT_DIR}/.env}.generated"
+    local tmp
+
+    [[ "${DEPLOY_ENV:-dev}" == "dev" ]] || return 0
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || die "pm-db: invalid generated environment key: $key" 2
+
+    # .env.generated is consumed by both Portmason and Docker Compose. Bash
+    # printf %q is not dotenv encoding: it turns a URL query delimiter into
+    # \\?, which Compose passes to the container literally. Persist derived
+    # values as single-quoted dotenv literals instead. These are literal in
+    # Compose and source safely in Bash for the canonical values written here.
+    case "$value" in
+        *$'\n'*|*$'\r'*)
+            die "pm-db: refusing multiline value in generated environment" 2
+            ;;
+        *"'"*)
+            die "pm-db: derived generated value contains an unsupported single quote" 2
+            ;;
+    esac
+
+    [[ -e "$file" ]] || : >"$file"
+    tmp="$(mktemp "${file}.XXXXXX")"
+    awk -F= -v wanted="$key" '$1 != wanted {print}' "$file" >"$tmp"
+    printf "%s='%s'\n" "$key" "$value" >>"$tmp"
+    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+    mv "$tmp" "$file"
+    log DEBUG "pm-db: updated generated development environment" \
+        "key=$key" "file=$file" "encoding=dotenv-literal"
+}
+
+pm_db_publish_generated_contract() {
+    [[ "${DEPLOY_ENV:-dev}" == "dev" ]] || return 0
+    local key
+
+    # DB_PASSWORD originates in the operator-authored .env and is already
+    # rendered into .env.generated by pm-generate-config. Do not rewrite it:
+    # this publication step owns only canonical selectors and values derived
+    # by the provider/platform bridge.
+    for key in DB_PROVIDER_PLATFORM_CODE DB_PROVIDER_CODE DB_PLATFORM_CODE DB_HOST DB_PORT DB_NAME DB_USER DATABASE_URL DATABASE_DIRECT_URL; do
+        [[ -v "$key" ]] || continue
+        pm_generated_env_upsert "$key" "${!key}"
+    done
+    log INFO "pm-db: published canonical database contract to development runtime environment" \
+        "file=${ENV_FILE}.generated" "encoding=dotenv-literal"
+}

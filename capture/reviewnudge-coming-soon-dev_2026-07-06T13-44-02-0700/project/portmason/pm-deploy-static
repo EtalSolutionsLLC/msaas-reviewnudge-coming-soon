@@ -1,0 +1,607 @@
+#!/usr/bin/env bash
+
+# Static runtime deploy tasks.
+#
+# Responsibilities:
+# - Render static HTML partials and executable hooks into deployable pages.
+# - Keep deployed output fully static.
+# - Preserve Portmason marker comments for repeatable/idempotent rendering.
+# - Support page-specific partial tokens, including CASE_SUBTITLE.
+# - Roll back the current HTML page if rendering that page fails.
+#
+# Marker model:
+#
+#   <!-- PM:HEADER -->
+#   rendered content
+#   <!-- /PM:HEADER -->
+#
+# Markers are managed regions. They remain in production HTML.
+#
+# Renderer resolution order for PM:<NAME>:
+#   1. partials/hooks/<lowercase-name> when it is executable
+#   2. partials/<lowercase-name>.html as the static fallback
+#
+# Page-specific token model:
+#
+#   Preferred page-level attribute:
+#     <body data-case-subtitle="Integration Case Study">
+#
+#   Supported partial token:
+#     {{CASE_SUBTITLE}}
+#
+#   Fallbacks for CASE_SUBTITLE:
+#     1. <body data-case-subtitle="...">
+#     2. content/case-studies.json entry matching the page URL or ID slug
+#     3. "Architecture Case Study"
+
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}" 
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+require_site_dir() {
+    [[ -n "${SITE_DIR:-}" && -d "${SITE_DIR}" ]] || die "SITE_DIR is empty or not a directory: ${SITE_DIR:-<unset>}" 1
+}
+
+pm_partial_name_to_file() {
+    local __out="$1"
+    local partial_name="$2"
+
+    local partial_slug=""
+    partial_slug="$(printf '%s' "$partial_name" | tr '[:upper:]' '[:lower:]')"
+
+    printf -v "$__out" '%s/partials/%s.html' "${SITE_DIR}" "$partial_slug"
+}
+
+pm_partial_name_to_hook() {
+    local __out="$1"
+    local partial_name="$2"
+
+    local partial_slug=""
+    partial_slug="$(printf '%s' "$partial_name" | tr '[:upper:]' '[:lower:]')"
+
+    printf -v "$__out" '%s/partials/hooks/%s' "${SITE_DIR}" "$partial_slug"
+}
+
+pm_find_html_pages() {
+    local site_dir="$1"
+    local configured_excludes="${PM_STATIC_EXCLUDE_DIRS:-}"
+    local exclude_dir=""
+    local -a find_args=(
+        "${site_dir}"
+        -type f
+        -name '*.html'
+        -not -path '*/partials/*'
+        -not -path '*/.git/*'
+        -not -path '*/capture/*'
+        -not -path '*/archive/*'
+        -not -path '*/portmason/*'
+        -not -path '*/tests/*'
+        -not -path '*/deploy/*'
+    )
+
+    # Optional top-level or nested directory names may be added as a
+    # comma- or whitespace-delimited list, for example:
+    #   PM_STATIC_EXCLUDE_DIRS="capture,generated"
+    configured_excludes="${configured_excludes//,/ }"
+    for exclude_dir in ${configured_excludes}; do
+        [[ -n "${exclude_dir}" ]] || continue
+
+        case "${exclude_dir}" in
+            /*|*'..'*|*'\\'*)
+                die "Unsafe PM_STATIC_EXCLUDE_DIRS entry: ${exclude_dir}" 2
+                ;;
+        esac
+
+        find_args+=( -not -path "*/${exclude_dir}/*" )
+    done
+
+    find "${find_args[@]}" -print
+}
+
+pm_extract_partial_names() {
+    local page="$1"
+
+    grep -Eoh '<!--[[:space:]]*PM:[A-Z0-9_-]+[[:space:]]*-->' "$page" 2>/dev/null \
+        | sed -E 's/.*PM:([A-Z0-9_-]+).*/\1/' \
+        | sort -u \
+        || true
+}
+
+pm_count_partial_start_markers() {
+    local __out="$1"
+    local page="$2"
+    local partial_name="$3"
+
+    local marker_count=""
+    marker_count="$(
+        grep -Ec "<!--[[:space:]]*PM:${partial_name}[[:space:]]*-->" "$page" 2>/dev/null \
+            || true
+    )"
+
+    printf -v "$__out" '%s' "$marker_count"
+}
+
+pm_count_partial_end_markers() {
+    local __out="$1"
+    local page="$2"
+    local partial_name="$3"
+
+    local marker_count=""
+    marker_count="$(
+        grep -Ec "<!--[[:space:]]*/PM:${partial_name}[[:space:]]*-->" "$page" 2>/dev/null \
+            || true
+    )"
+
+    printf -v "$__out" '%s' "$marker_count"
+}
+
+verify_partial_markers_balanced() {
+    local page="$1"
+    local partial_name="$2"
+
+    local start_count=""
+    local end_count=""
+
+    pm_count_partial_start_markers start_count "$page" "$partial_name"
+    pm_count_partial_end_markers end_count "$page" "$partial_name"
+
+    if [[ "$start_count" -eq 0 && "$end_count" -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ "$start_count" -eq 0 ]]; then
+        log ERROR "Missing start marker for ${partial_name} in ${page}"
+        return 1
+    fi
+
+    if [[ "$end_count" -eq 0 ]]; then
+        log ERROR "Missing end marker for ${partial_name} in ${page}"
+        return 1
+    fi
+
+    if [[ "$start_count" -ne "$end_count" ]]; then
+        log ERROR "Unbalanced partial markers for ${partial_name} in ${page}: start=${start_count}, end=${end_count}"
+        return 1
+    fi
+
+    return 0
+}
+
+pm_make_page_backup() {
+    local __out="$1"
+    local page="$2"
+
+    local tmp_backup_file=""
+    local rc=0
+    tmp_backup_file="$(mktemp)"
+
+    if cp -p "$page" "$tmp_backup_file"; then
+        :
+    else
+        rc=$?
+        rm -f "$tmp_backup_file"
+        log ERROR "Failed to create rollback backup for ${page}; rc=${rc}"
+        return "$rc"
+    fi
+
+    printf -v "$__out" '%s' "$tmp_backup_file"
+}
+
+pm_restore_page_backup() {
+    local page="$1"
+    local backup_file="${2:-}"
+
+    if [[ -n "$backup_file" && -f "$backup_file" ]]; then
+        cp -p "$backup_file" "$page"
+        log WARN "Rolled back ${page} from ${backup_file}"
+    else
+        log ERROR "Rollback backup missing for ${page}: ${backup_file:-<unset>}"
+    fi
+}
+
+pm_discard_page_backup() {
+    local backup_file="${1:-}"
+
+    [[ -n "$backup_file" ]] && rm -f "$backup_file"
+}
+
+pm_html_unescape_minimal() {
+    local __out="$1"
+    local input_value="${2:-}"
+    local decoded_value="$input_value"
+
+    decoded_value="${decoded_value//&quot;/\"}"
+    decoded_value="${decoded_value//&#34;/\"}"
+    decoded_value="${decoded_value//&apos;/\'}"
+    decoded_value="${decoded_value//&#39;/\'}"
+    decoded_value="${decoded_value//&amp;/&}"
+    decoded_value="${decoded_value//&lt;/<}"
+    decoded_value="${decoded_value//&gt;/>}"
+
+    printf -v "$__out" '%s' "$decoded_value"
+}
+
+pm_extract_body_data_attr() {
+    local __out="$1"
+    local page="$2"
+    local attr_name="$3"
+
+    local raw_attr_value=""
+    local decoded_attr_value=""
+
+    raw_attr_value="$(
+        awk -v attr="${attr_name}" '
+            BEGIN { IGNORECASE = 1 }
+            /<body([[:space:]>]|$)/ {
+                body = $0
+                while (body !~ />/ && (getline next_line) > 0) {
+                    body = body " " next_line
+                }
+
+                pattern_dq = attr "[[:space:]]*=[[:space:]]*\"[^\"]*\""
+                pattern_sq = attr "[[:space:]]*=[[:space:]]*'\''[^'\'']*'\''"
+
+                if (match(body, pattern_dq)) {
+                    found = substr(body, RSTART, RLENGTH)
+                    sub(/^[^=]*=[[:space:]]*\"/, "", found)
+                    sub(/\"$/, "", found)
+                    print found
+                    exit
+                }
+
+                if (match(body, pattern_sq)) {
+                    found = substr(body, RSTART, RLENGTH)
+                    sub(/^[^=]*=[[:space:]]*'\''/, "", found)
+                    sub(/'\''$/, "", found)
+                    print found
+                    exit
+                }
+            }
+        ' "$page" 2>/dev/null || true
+    )"
+
+    pm_html_unescape_minimal decoded_attr_value "$raw_attr_value"
+    printf -v "$__out" '%s' "$decoded_attr_value"
+}
+
+pm_json_case_subtitle_for_page() {
+    local __out="$1"
+    local page="$2"
+
+    local json_file="${SITE_DIR}/content/case-studies.json"
+    local json_subtitle=""
+
+    if [[ ! -f "$json_file" ]]; then
+        printf -v "$__out" '%s' ""
+        return 0
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        json_subtitle="$(python3 -c '
+import json
+import os
+import sys
+
+site_dir, page, json_file = sys.argv[1:4]
+rel_page = os.path.relpath(page, site_dir).replace(os.sep, "/")
+page_slug = os.path.splitext(os.path.basename(page))[0]
+
+try:
+    with open(json_file, "r", encoding="utf-8") as fh:
+        items = json.load(fh)
+except Exception:
+    sys.exit(0)
+
+if not isinstance(items, list):
+    sys.exit(0)
+
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    url = str(item.get("url", "")).lstrip("/")
+    item_id = str(item.get("id", ""))
+    tag = str(item.get("tag", ""))
+
+    if tag and (url == rel_page or item_id == page_slug):
+        print(tag)
+        break
+' "$SITE_DIR" "$page" "$json_file" 2>/dev/null || true)"
+    fi
+
+    printf -v "$__out" '%s' "$json_subtitle"
+}
+
+pm_page_case_subtitle() {
+    local __out="$1"
+    local page="$2"
+
+    local subtitle_value=""
+
+    pm_extract_body_data_attr subtitle_value "$page" "data-case-subtitle"
+
+    if [[ -z "$subtitle_value" ]]; then
+        pm_json_case_subtitle_for_page subtitle_value "$page"
+    fi
+
+    if [[ -z "$subtitle_value" ]]; then
+        subtitle_value="Architecture Case Study"
+    fi
+
+    printf -v "$__out" '%s' "$subtitle_value"
+}
+
+render_partials() {
+    require_site_dir
+
+    if [[ ! -d "${SITE_DIR}/partials" ]]; then
+        warn "No partials directory found: ${SITE_DIR}/partials"
+        return 0
+    fi
+
+    local page=""
+    local rc=0
+
+    while IFS= read -r page; do
+        [[ -f "$page" ]] || continue
+
+        if render_page_partials "$page"; then
+            continue
+        else
+            rc=$?
+            die "Static partial rendering failed for ${page}; file was rolled back." "$rc"
+        fi
+    done < <(pm_find_html_pages "${SITE_DIR}")
+}
+
+render_page_partials() {
+    local page="$1"
+
+    if [[ ! -f "$page" ]]; then
+        log ERROR "Page not found while rendering partials: ${page}"
+        return 1
+    fi
+
+    local backup_file=""
+    local partial_name=""
+    local partial_file=""
+    local partial_hook=""
+    local rc=0
+
+    if ! pm_make_page_backup backup_file "$page"; then
+        return 1
+    fi
+
+    while IFS= read -r partial_name; do
+        [[ -n "$partial_name" ]] || continue
+
+        if verify_partial_markers_balanced "$page" "$partial_name"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+
+        pm_partial_name_to_file partial_file "$partial_name"
+        pm_partial_name_to_hook partial_hook "$partial_name"
+
+        if render_partial "$page" "$partial_name" "$partial_file" "$partial_hook"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+    done < <(pm_extract_partial_names "$page")
+
+    if [[ "$rc" -ne 0 ]]; then
+        pm_restore_page_backup "$page" "$backup_file"
+        pm_discard_page_backup "$backup_file"
+        return "$rc"
+    fi
+
+    if verify_page_partial_markers_balanced "$page"; then
+        :
+    else
+        rc=$?
+        pm_restore_page_backup "$page" "$backup_file"
+        pm_discard_page_backup "$backup_file"
+        return "$rc"
+    fi
+
+    pm_discard_page_backup "$backup_file"
+    return 0
+}
+
+render_partial() {
+    local page="$1"
+    local partial_name="$2"
+    local partial_file="$3"
+    local partial_hook="$4"
+
+    if [[ ! -f "$page" ]]; then
+        log ERROR "Page not found while rendering partial: ${page}"
+        return 1
+    fi
+
+    local partial_source="$partial_file"
+    local partial_source_kind="partial"
+    local generated_source=""
+    local hook_rc=0
+
+    if [[ -f "$partial_hook" && -x "$partial_hook" ]]; then
+        generated_source="$(mktemp)"
+
+        if (
+            cd "$SITE_DIR"
+            SITE_DIR="$SITE_DIR" "$partial_hook"
+        ) > "$generated_source"; then
+            partial_source="$generated_source"
+            partial_source_kind="hook"
+        else
+            hook_rc=$?
+            rm -f "$generated_source"
+            log ERROR "Hook failed for ${partial_name}: ${partial_hook}; rc=${hook_rc}"
+            return "$hook_rc"
+        fi
+    elif [[ ! -f "$partial_file" ]]; then
+        if [[ -f "$partial_hook" ]]; then
+            log ERROR "Hook is not executable and no static partial exists for ${partial_name}: hook=${partial_hook}, partial=${partial_file}"
+        else
+            log ERROR "No hook or partial found for ${partial_name}: hook=${partial_hook}, partial=${partial_file}"
+        fi
+        return 1
+    fi
+
+    local case_subtitle=""
+    pm_page_case_subtitle case_subtitle "$page"
+
+    local tmp_file=""
+    tmp_file="$(mktemp)"
+
+    if awk \
+        -v partial_name="$partial_name" \
+        -v partial_file="$partial_source" \
+        -v case_subtitle="$case_subtitle" '
+        function render_template(input, output) {
+            output = input
+            gsub(/\{\{CASE_SUBTITLE\}\}/, case_subtitle, output)
+            return output
+        }
+
+        BEGIN {
+            start_marker = "<!-- PM:" partial_name " -->"
+            end_marker = "<!-- /PM:" partial_name " -->"
+            in_block = 0
+            rendered = 0
+
+            while ((getline partial_line < partial_file) > 0) {
+                partial = partial render_template(partial_line) ORS
+            }
+            close(partial_file)
+        }
+
+        $0 ~ "<!--[[:space:]]*PM:" partial_name "[[:space:]]*-->" {
+            print start_marker
+            printf "%s", partial
+            print end_marker
+            in_block = 1
+            rendered++
+            next
+        }
+
+        $0 ~ "<!--[[:space:]]*/PM:" partial_name "[[:space:]]*-->" {
+            in_block = 0
+            next
+        }
+
+        in_block == 0 {
+            print
+        }
+
+        END {
+            if (rendered == 0) {
+                exit 10
+            }
+        }
+        ' "$page" > "$tmp_file"; then
+        :
+    else
+        local rc=$?
+        rm -f "$tmp_file" "$generated_source"
+
+        case "$rc" in
+            10)
+                log ERROR "Failed to render ${partial_name}; no start marker processed in ${page}"
+                ;;
+            *)
+                log ERROR "Failed to render ${partial_name} into ${page}; rc=${rc}"
+                ;;
+        esac
+
+        return "$rc"
+    fi
+
+    rm -f "$generated_source"
+
+    if mv "$tmp_file" "$page"; then
+        chmod 0644 "$page" || true
+    else
+        local rc=$?
+        rm -f "$tmp_file"
+        log ERROR "Failed to replace rendered page: ${page}; rc=${rc}"
+        return "$rc"
+    fi
+
+    log INFO "Rendered ${partial_source_kind} ${partial_name} into ${page}"
+    return 0
+}
+
+verify_page_partial_markers_balanced() {
+    local page="$1"
+    local partial_name=""
+    local rc=0
+
+    while IFS= read -r partial_name; do
+        [[ -n "$partial_name" ]] || continue
+
+        if verify_partial_markers_balanced "$page" "$partial_name"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+    done < <(pm_extract_partial_names "$page")
+
+    return "$rc"
+}
+
+verify_all_partial_markers_balanced() {
+    require_site_dir
+
+    local page=""
+    local rc=0
+
+    while IFS= read -r page; do
+        [[ -f "$page" ]] || continue
+
+        if verify_page_partial_markers_balanced "$page"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+    done < <(pm_find_html_pages "${SITE_DIR}")
+
+    return "$rc"
+}
+
+pm_deploy_static_main() {
+    require_site_dir
+
+    log INFO "pm-deploy-static: verifying partial markers"
+    local rc=0
+    if verify_all_partial_markers_balanced; then
+        :
+    else
+        rc=$?
+        die "Static partial marker verification failed before rendering." "$rc"
+    fi
+
+    log INFO "pm-deploy-static: rendering partials"
+    render_partials
+
+    log INFO "pm-deploy-static: verifying rendered partial markers"
+    if verify_all_partial_markers_balanced; then
+        :
+    else
+        rc=$?
+        die "Static partial marker verification failed after rendering." "$rc"
+    fi
+
+    log INFO "pm-deploy-static: complete"
+}
+
+pm_deploy_static_main "$@"

@@ -1,0 +1,26 @@
+diff --git a/.env b/.env
+index 3b612e9..ff371f9 100644
+--- a/.env
++++ b/.env
+@@ -1,4 +1,4 @@
+-APP_SLUG=etal-misc
++APP_SLUG=reviewnudge-coming-soon
+ DEPLOY_ENV=dev
+ RUNTIME_ADAPTER_CODE=bash-local
+ 
+@@ -51,3 +51,5 @@ MANAGED_BY=compose
+ LIFECYCLE=long-lived
+ DATA_CLASS=confidential
+ DATA_LIFECYCLE=persistent
++PROJECT_ID=reviewnudge-coming--1777712786
++DEPLOYMENT_ID=reviewnudge-coming--1777712786
+diff --git a/003-reviewnudge-waitlist-coming-soon.tar.gz:Zone.Identifier b/003-reviewnudge-waitlist-coming-soon.tar.gz:Zone.Identifier
+deleted file mode 100644
+index 4c20b2e..0000000
+--- a/003-reviewnudge-waitlist-coming-soon.tar.gz:Zone.Identifier
++++ /dev/null
+@@ -1,4 +0,0 @@
+-[ZoneTransfer]
+-ZoneId=3
+-ReferrerUrl=https://chatgpt.com/g/g-p-695c01d809188191aef599c9c7131cdf/c/6a4bc6f6-5dc8-83e8-b34b-5ad019882cb6
+-HostUrl=https://chatgpt.com/backend-api/estuary/content?id=file_000000003d2871fdae214cd3d6c7db45&ts=495376&p=fs&cid=1&sig=97b973aac4246b391d6bf8fb9122e54a9e71a9912e5943792e86077efc399315&v=0

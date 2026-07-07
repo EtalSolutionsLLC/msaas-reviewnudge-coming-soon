@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}" 
+export CUR_SCRIPT
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+if ! declare -F pm_gcp_write_env_file_for_role >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    . "${PORTMASON_SHARE}/pm-helpers-gcp-secrets"
+fi
+
+pm_gcp_resource_name() {
+    local out_var="${1:?output variable required}"
+    local service="${2:?service required}"
+    local value="${STACK:?STACK required}-${service}"
+    value="${value,,}"
+    value="$(printf '%s' "$value" | sed 's/[^a-z0-9-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
+    [[ "$value" =~ ^[a-z] ]] || value="p-${value}"
+    printf -v "$out_var" '%s' "${value:0:63}"
+}
+
+pm_gcp_compose_image_for_service() {
+    local out_var="${1:?output variable required}"
+    local service="${2:?service required}"
+    local configured_image="${3:-}"
+    local image="$configured_image"
+    [[ -n "$image" ]] || image="${STACK}-${service}:latest"
+    printf -v "$out_var" '%s' "$image"
+}
+
+pm_gcp_build_service_image() {
+    local service="${1:?service required}"
+    local has_build="${2:-false}"
+    if [[ "$has_build" == "true" ]]; then
+        log INFO "pm-deploy-gcp: building Compose service image" "service=$service"
+        "${PM_COMPOSE_CMD[@]}" build "$service"
+        log INFO "pm-deploy-gcp: Compose image build complete" "service=$service"
+    else
+        log DEBUG "pm-deploy-gcp: service has no build section" "service=$service"
+    fi
+}
+
+pm_gcp_push_service_image() {
+    local service="${1:?service required}"
+    local source_image="${2:?source image required}"
+    local out_var="${3:?output variable required}"
+    local resource tag resolved_target_image
+
+    pm_gcp_resource_name resource "$service"
+    tag="${PM_IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
+    resolved_target_image="${REGION}-docker.pkg.dev/${DEPLOYMENT_ID}/${AR_REPO}/${resource}:${tag}"
+
+    log INFO "pm-deploy-gcp: tagging service image" \
+        "service=$service" "source=$source_image" "target=$resolved_target_image"
+    docker image inspect "$source_image" >/dev/null 2>&1 \
+        || die "Compose service image is not available locally: $source_image" 2
+    docker tag "$source_image" "$resolved_target_image"
+
+    log INFO "pm-deploy-gcp: pushing service image" \
+        "service=$service" "target=$resolved_target_image"
+    docker push --quiet "$resolved_target_image" >/dev/null \
+        || die "docker push failed for $resolved_target_image" 2
+    log INFO "pm-deploy-gcp: service image pushed" \
+        "service=$service" "target=$resolved_target_image"
+
+    printf -v "$out_var" '%s' "$resolved_target_image"
+}
+
+pm_gcp_service_command_args() {
+    local service="${1:?service required}"
+    local -n out_ref="${2:?output array variable required}"
+    local command_json entrypoint_json first rest
+
+    command_json="$(jq -c --arg service "$service" \
+        '.[] | select(.service == $service) | .command' \
+        <<<"${PROJECT_SERVICES:-[]}")"
+    entrypoint_json="$(jq -c --arg service "$service" \
+        '.[] | select(.service == $service) | .entrypoint' \
+        <<<"${PROJECT_SERVICES:-[]}")"
+
+    if [[ "$entrypoint_json" != "null" && "$entrypoint_json" != "[]" && -n "$entrypoint_json" ]]; then
+        first="$(jq -r 'if type == "array" then .[0] // empty else . end' <<<"$entrypoint_json")"
+        [[ -n "$first" ]] && out_ref+=(--command "$first")
+    fi
+
+    if [[ "$command_json" != "null" && "$command_json" != "[]" && -n "$command_json" ]]; then
+        first="$(jq -r 'if type == "array" then .[0] // empty else empty end' <<<"$command_json")"
+        rest="$(jq -r 'if type == "array" then .[1:] | join(",") else . end' <<<"$command_json")"
+        if [[ -n "$first" && ${#out_ref[@]} -eq 0 ]]; then
+            out_ref+=(--command "$first")
+        fi
+        [[ -n "$rest" ]] && out_ref+=(--args "$rest")
+    fi
+}
+
+pm_gcp_runtime_service_account() {
+    local out_var="${1:?output variable required}"
+    local service="${2:?service required}"
+    local email
+    email="$(format_sa_email "$service")"
+    printf -v "$out_var" '%s' "$email"
+}
+
+pm_gcp_deploy_cloud_run_service() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local image="${3:?image required}"
+    local resource service_account env_file=""
+    local -a env_flags=() secret_flags=() command_flags=() cloudsql_flags=()
+
+    pm_gcp_resource_name resource "$service"
+    pm_gcp_runtime_service_account service_account "$service"
+    pm_gcp_write_env_file_for_role env_file "$role"
+    env_flags=(--env-vars-file "$env_file")
+    readarray -d '' -t secret_flags < <(pm_gcp_secret_args_for_role "$role")
+    pm_gcp_service_command_args "$service" command_flags
+    [[ -n "${CLOUD_SQL_CONNECTION_NAME:-}" ]] \
+        && cloudsql_flags=(--add-cloudsql-instances "$CLOUD_SQL_CONNECTION_NAME")
+
+    local -a cmd=(
+        gcloud run deploy "$resource"
+        --project "$DEPLOYMENT_ID"
+        --region "$REGION"
+        --platform managed
+        --image "$image"
+        --service-account "$service_account"
+        --allow-unauthenticated
+        --port "${PORT:-8080}"
+        --startup-probe "httpGet.path=${PM_HEALTH_PATH:-/livez},initialDelaySeconds=15,periodSeconds=10,timeoutSeconds=10,failureThreshold=30"
+        "${cloudsql_flags[@]}"
+        "${env_flags[@]}"
+        "${secret_flags[@]}"
+        "${command_flags[@]}"
+    )
+
+    log INFO "pm-deploy-gcp: deploying Cloud Run service" \
+        "compose_service=$service" "resource=$resource" "role=$role" \
+        "service_account=$service_account"
+    log_cmd "${cmd[@]}"
+    if ! "${cmd[@]}" >/dev/null; then
+        rm -f "$env_file"
+        die "pm-deploy-gcp: Cloud Run service deployment failed: $resource" 2
+    fi
+    rm -f "$env_file"
+
+    local url
+    url="$(gcloud run services describe "$resource" \
+        --project "$DEPLOYMENT_ID" --region "$REGION" \
+        --format='value(status.url)')"
+    log INFO "pm-deploy-gcp: Cloud Run service deployment complete" \
+        "resource=$resource" "url=$url"
+
+    if [[ "$role" == "web" || "$role" == "app" ]]; then
+        env_init_set APP_PLATFORM_URL "$url"
+    fi
+}
+
+pm_gcp_deploy_cloud_run_job() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local image="${3:?image required}"
+    local resource service_account action env_file=""
+    local -a env_flags=() secret_flags=() command_flags=() cloudsql_flags=()
+
+    pm_gcp_resource_name resource "$service"
+    pm_gcp_runtime_service_account service_account "$service"
+    pm_gcp_write_env_file_for_role env_file "$role"
+    env_flags=(--env-vars-file "$env_file")
+    readarray -d '' -t secret_flags < <(pm_gcp_secret_args_for_role "$role")
+    pm_gcp_service_command_args "$service" command_flags
+    [[ -n "${CLOUD_SQL_CONNECTION_NAME:-}" ]] \
+        && cloudsql_flags=(--set-cloudsql-instances "$CLOUD_SQL_CONNECTION_NAME")
+
+    action="update"
+    if ! gcloud run jobs describe "$resource" \
+        --project "$DEPLOYMENT_ID" --region "$REGION" >/dev/null 2>&1; then
+        action="create"
+    fi
+
+    local -a cmd=(
+        gcloud run jobs "$action" "$resource"
+        --project "$DEPLOYMENT_ID"
+        --region "$REGION"
+        --image "$image"
+        --service-account "$service_account"
+        "${cloudsql_flags[@]}"
+        "${env_flags[@]}"
+        "${secret_flags[@]}"
+        "${command_flags[@]}"
+    )
+
+    log INFO "pm-deploy-gcp: ensuring Cloud Run job" \
+        "compose_service=$service" "resource=$resource" "role=$role" \
+        "action=$action" "service_account=$service_account"
+    log_cmd "${cmd[@]}"
+    if ! "${cmd[@]}" >/dev/null; then
+        rm -f "$env_file"
+        die "pm-deploy-gcp: Cloud Run job deployment failed: $resource" 2
+    fi
+    rm -f "$env_file"
+    log INFO "pm-deploy-gcp: Cloud Run job ready" "resource=$resource"
+}
+
+pm_gcp_deploy_compose_service() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local configured_image="${3:-}"
+    local has_build="${4:-false}"
+    local source_image target_image
+
+    pm_gcp_compose_image_for_service source_image "$service" "$configured_image"
+    pm_gcp_build_service_image "$service" "$has_build"
+    pm_gcp_push_service_image "$service" "$source_image" target_image
+
+    case "$role" in
+        jobs|worker)
+            pm_gcp_deploy_cloud_run_job "$service" "$role" "$target_image"
+            ;;
+        *)
+            pm_gcp_deploy_cloud_run_service "$service" "$role" "$target_image"
+            ;;
+    esac
+}
+
+pm_gcp_bind_cloudsql_client() {
+    local service_account="${1:?service account required}"
+    log INFO "pm-deploy-gcp: ensuring Cloud SQL client role" \
+        "service_account=$service_account" "project=$DEPLOYMENT_ID"
+    gcloud projects add-iam-policy-binding "$DEPLOYMENT_ID" \
+        --member "serviceAccount:${service_account}" \
+        --role roles/cloudsql.client \
+        --quiet >/dev/null
+}
+
+pm_deploy_db_platform() {
+    [[ "${DB_PLATFORM:-}" == "gcp" ]] \
+        || die "pm-deploy-gcp database entrypoint requires DB_PLATFORM=gcp" 2
+    : "${CLOUD_SQL_CONNECTION_NAME:?CLOUD_SQL_CONNECTION_NAME required}"
+
+    log INFO "pm-deploy-gcp: starting database platform deployment" \
+        "connection=$CLOUD_SQL_CONNECTION_NAME"
+
+    pm_compose_load_model
+
+    local service role image has_build service_account
+    while IFS=$'\t' read -r service role image has_build; do
+        [[ -n "$service" ]] || continue
+        pm_gcp_runtime_service_account service_account "$service"
+        pm_gcp_bind_cloudsql_client "$service_account"
+    done < <(pm_compose_deployable_services_tsv)
+
+    log INFO "pm-deploy-gcp: database platform deployment complete" \
+        "connection=$CLOUD_SQL_CONNECTION_NAME"
+}
+
+pm_deploy_runtime_platform() {
+    [[ "${ADAPTER_CODE:-}" == "gcp" ]] \
+        || die "pm-deploy-gcp runtime entrypoint requires ADAPTER_CODE=gcp" 2
+
+    have gcloud || die "Missing required command: gcloud" 2
+    have docker || die "Missing required command: docker" 2
+    have jq || die "Missing required command: jq" 2
+
+    pm_compose_load_model
+    [[ ${#PM_COMPOSE_CMD[@]} -gt 0 ]] || pm_compose_init_command
+
+    log INFO "pm-deploy-gcp: starting runtime platform deployment" \
+        "stack=$STACK" "project=$DEPLOYMENT_ID" "region=$REGION"
+
+    gcloud config set project "$DEPLOYMENT_ID" >/dev/null
+    gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet >/dev/null
+
+    # Runtime configuration belongs to the runtime platform regardless of where
+    # the database is hosted. Synchronize secrets and grant service-level access
+    # before any Cloud Run revision is created.
+    pm_gcp_sync_project_runtime_secrets
+
+    local service role image has_build service_account
+    while IFS=$'\t' read -r service role image has_build; do
+        [[ -n "$service" ]] || continue
+        pm_gcp_runtime_service_account service_account "$service"
+        pm_gcp_bind_service_secret_access "$service_account" "$role"
+        if [[ -n "${CLOUD_SQL_CONNECTION_NAME:-}" ]]; then
+            pm_gcp_bind_cloudsql_client "$service_account"
+        fi
+        pm_gcp_deploy_compose_service "$service" "$role" "$image" "$has_build"
+    done < <(pm_compose_deployable_services_tsv)
+
+    log INFO "pm-deploy-gcp: runtime platform deployment complete" \
+        "app_platform_url=${APP_PLATFORM_URL:-<not-applicable>}"
+}
+
+main() {
+    pm_deploy_runtime_platform "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

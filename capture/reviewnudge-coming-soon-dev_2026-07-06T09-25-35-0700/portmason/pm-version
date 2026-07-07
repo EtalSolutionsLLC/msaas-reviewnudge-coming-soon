@@ -1,0 +1,904 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}" 
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+
+# pm-version has a machine-readable stdout contract. Keep pm-helpers logging on
+# stderr, but do not allow its normal redirection or local-container prefixing
+# to alter command results captured by callers.
+export PM_NO_REDIRECT=1
+
+# shellcheck disable=SC1091
+. "${PORTMASON_SHARE}/pm-helpers" --minimal >&2
+
+# pm-version deliberately writes only command results and generated file content
+# to stdout. All human-readable operational messages use pm-helpers log/die.
+emit_line() {
+    printf '%s\n' "${1-}"
+}
+
+find_version_root() {
+    local start_dir="${1:-}"
+    local candidate=""
+
+    [[ -n "${start_dir}" ]] || return 1
+    [[ -d "${start_dir}" ]] || return 1
+
+    candidate="$(cd -- "${start_dir}" && pwd -P)"
+
+    while :; do
+        if [[ -f "${candidate}/RELEASE_VERSION" \
+            && -f "${candidate}/BUILD_NUMBER" \
+            && -f "${candidate}/VERSION" ]]; then
+            emit_line "${candidate}"
+            return 0
+        fi
+
+        [[ "${candidate}" != "/" ]] || break
+        candidate="$(dirname -- "${candidate}")"
+    done
+
+    return 1
+}
+
+resolve_project_root() {
+    local resolved=""
+
+    if [[ -n "${PM_VERSION_ROOT:-}" ]]; then
+        [[ -d "${PM_VERSION_ROOT}" ]] \
+            || die "PM_VERSION_ROOT is not a directory: ${PM_VERSION_ROOT}"
+        resolved="$(cd -- "${PM_VERSION_ROOT}" && pwd -P)"
+        emit_line "${resolved}"
+        return 0
+    fi
+
+    if [[ -n "${REPO_ROOT:-}" ]] \
+        && resolved="$(find_version_root "${REPO_ROOT}" 2>/dev/null)"; then
+        emit_line "${resolved}"
+        return 0
+    fi
+
+    if [[ -n "${SITE_DIR:-}" ]] \
+        && resolved="$(find_version_root "${SITE_DIR}" 2>/dev/null)"; then
+        emit_line "${resolved}"
+        return 0
+    fi
+
+    if resolved="$(find_version_root "$(pwd -P)" 2>/dev/null)"; then
+        emit_line "${resolved}"
+        return 0
+    fi
+
+    die "Unable to locate RELEASE_VERSION, BUILD_NUMBER, and VERSION. Run pm-version from a project workspace or set PM_VERSION_ROOT."
+}
+
+PROJECT_ROOT="$(resolve_project_root)"
+RELEASE_FILE="${PROJECT_ROOT}/RELEASE_VERSION"
+BUILD_FILE="${PROJECT_ROOT}/BUILD_NUMBER"
+COMPAT_FILE="${PROJECT_ROOT}/VERSION"
+LOCK_FILE="${PROJECT_ROOT}/.portmason-version.lock"
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  pm-version current [--json]
+  pm-version validate
+  pm-version release bump major|minor|patch
+  pm-version build allocate [--ci|--allow-local]
+  pm-version build meta [--emit-html]
+  pm-version build materialize --site-dir PATH
+  pm-version build seal --site-dir PATH
+  pm-version build finalize --site-dir PATH [--environment NAME] [--deployment-id ID]
+  pm-version deployment record --site-dir PATH [--environment NAME] [--deployment-id ID]
+  pm-version deployment verify --site-dir PATH
+
+Rules:
+  - RELEASE_VERSION is the product/marketing release.
+  - BUILD_NUMBER is the authoritative sequential deployable build number.
+  - VERSION is a compatibility alias maintained only by this command.
+  - Build allocation is CI-only unless --allow-local is explicit.
+  - Deployment commands never change release or build numbers.
+USAGE
+}
+
+atomic_write() {
+    local path="$1"
+    local value="$2"
+    local dir=""
+    local tmp=""
+
+    dir="$(dirname -- "${path}")"
+    mkdir -p -- "${dir}"
+    tmp="$(mktemp "${dir}/.$(basename -- "${path}").XXXXXX")"
+
+    # Exact file generation is an intentional printf exception.
+    printf '%s\n' "${value}" > "${tmp}"
+    chmod 0644 "${tmp}"
+    mv -f -- "${tmp}" "${path}"
+}
+
+read_trimmed() {
+    local path="$1"
+
+    [[ -r "${path}" ]] \
+        || die "Required version file is missing or unreadable: ${path}"
+    tr -d '[:space:]' < "${path}"
+}
+
+release_version() {
+    read_trimmed "${RELEASE_FILE}"
+}
+
+build_number() {
+    read_trimmed "${BUILD_FILE}"
+}
+
+validate_values() {
+    local release=""
+    local build=""
+    local compat=""
+
+    release="$(release_version)"
+    build="$(build_number)"
+    compat="$(read_trimmed "${COMPAT_FILE}")"
+
+    [[ "${release}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] \
+        || die "Invalid RELEASE_VERSION ${release@Q}; expected semantic version MAJOR.MINOR.PATCH"
+    [[ "${build}" =~ ^[0-9]{3,}$ ]] \
+        || die "Invalid BUILD_NUMBER ${build@Q}; expected at least three digits"
+    [[ "${compat}" == "${build}" ]] \
+        || die "VERSION compatibility alias (${compat}) does not match BUILD_NUMBER (${build})"
+}
+
+mirror_version_files() {
+    local snapshot=""
+
+    [[ -d "${PROJECT_ROOT}/deploy" ]] || return 0
+
+    while IFS= read -r -d '' snapshot; do
+        atomic_write "${snapshot}/RELEASE_VERSION" "$(release_version)"
+        atomic_write "${snapshot}/BUILD_NUMBER" "$(build_number)"
+        atomic_write "${snapshot}/VERSION" "$(build_number)"
+    done < <(find "${PROJECT_ROOT}/deploy" -mindepth 1 -maxdepth 1 -type d -print0)
+}
+
+validate_mirrors() {
+    local snapshot=""
+    local expected_release=""
+    local expected_build=""
+
+    expected_release="$(release_version)"
+    expected_build="$(build_number)"
+    [[ -d "${PROJECT_ROOT}/deploy" ]] || return 0
+
+    while IFS= read -r -d '' snapshot; do
+        [[ -r "${snapshot}/RELEASE_VERSION" ]] \
+            || die "Deploy snapshot is missing RELEASE_VERSION: ${snapshot}"
+        [[ -r "${snapshot}/BUILD_NUMBER" ]] \
+            || die "Deploy snapshot is missing BUILD_NUMBER: ${snapshot}"
+        [[ -r "${snapshot}/VERSION" ]] \
+            || die "Deploy snapshot is missing VERSION: ${snapshot}"
+        [[ "$(read_trimmed "${snapshot}/RELEASE_VERSION")" == "${expected_release}" ]] \
+            || die "Deploy snapshot release mismatch: ${snapshot}"
+        [[ "$(read_trimmed "${snapshot}/BUILD_NUMBER")" == "${expected_build}" ]] \
+            || die "Deploy snapshot build mismatch: ${snapshot}"
+        [[ "$(read_trimmed "${snapshot}/VERSION")" == "${expected_build}" ]] \
+            || die "Deploy snapshot VERSION alias mismatch: ${snapshot}"
+    done < <(find "${PROJECT_ROOT}/deploy" -mindepth 1 -maxdepth 1 -type d -print0)
+}
+
+validate_all() {
+    validate_values
+    validate_mirrors
+}
+
+is_true() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+source_commit() {
+    local commit=""
+
+    if [[ -n "${PM_SOURCE_COMMIT:-}" ]]; then
+        emit_line "${PM_SOURCE_COMMIT}"
+        return 0
+    fi
+
+    if [[ -n "${GITHUB_SHA:-}" ]]; then
+        emit_line "${GITHUB_SHA}"
+        return 0
+    fi
+
+    if commit="$(git -C "${PROJECT_ROOT}" rev-parse HEAD 2>/dev/null)"; then
+        emit_line "${commit}"
+    else
+        emit_line "unavailable"
+    fi
+}
+
+source_dirty() {
+    if [[ -n "${PM_SOURCE_DIRTY:-}" ]]; then
+        if is_true "${PM_SOURCE_DIRTY}"; then
+            emit_line "true"
+        else
+            emit_line "false"
+        fi
+        return 0
+    fi
+
+    if ! git -C "${PROJECT_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        emit_line "false"
+        return 0
+    fi
+
+    if git -C "${PROJECT_ROOT}" status --porcelain --untracked-files=normal 2>/dev/null \
+        | grep -Ev '(^|/)(build-info|deploy-info|artifact-manifest)\.json$' \
+        | grep -q .; then
+        emit_line "true"
+    else
+        emit_line "false"
+    fi
+}
+
+resolve_environment() {
+    local requested="${1:-}"
+    local value=""
+
+    if [[ -n "${requested}" ]]; then
+        emit_line "${requested}"
+        return 0
+    fi
+
+    if [[ -n "${PM_DEPLOY_ENV:-}" ]]; then
+        emit_line "${PM_DEPLOY_ENV}"
+        return 0
+    fi
+
+    if [[ -n "${DEPLOY_ENV:-}" ]]; then
+        emit_line "${DEPLOY_ENV}"
+        return 0
+    fi
+
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        emit_line "github-pages"
+        return 0
+    fi
+
+    if [[ -r "${PROJECT_ROOT}/.env.generated" ]]; then
+        value="$(
+            awk -F= '$1 == "DEPLOY_ENV" {print substr($0, index($0, "=") + 1); exit}' \
+                "${PROJECT_ROOT}/.env.generated" \
+                | tr -d '"\r'
+        )"
+        if [[ -n "${value}" ]]; then
+            emit_line "${value}"
+            return 0
+        fi
+    fi
+
+    emit_line "local"
+}
+
+emit_meta_html() {
+    local release=""
+    local build=""
+
+    validate_all
+    release="$(release_version)"
+    build="$(build_number)"
+
+    # Exact generated HTML is an intentional printf exception.
+    printf '<!-- ETAL_SITE_RELEASE version="%s" build="%s" build-details="/build-info.json" deployment-details="/deploy-info.json" -->\n' "${release}" "${build}"
+    printf '<meta name="etal-site-release" content="%s" />\n' "${release}"
+    printf '<meta name="etal-site-build" content="%s" />\n' "${build}"
+    printf '<meta name="etal-site-build-info" content="/build-info.json" />\n'
+    printf '<meta name="etal-site-deploy-info" content="/deploy-info.json" />\n'
+}
+
+materialize_build() {
+    local site_dir="$1"
+    local release=""
+    local build=""
+    local commit=""
+    local dirty=""
+    local built_at=""
+    local official="false"
+    local build_id=""
+
+    validate_all
+    release="$(release_version)"
+    build="$(build_number)"
+    commit="$(source_commit)"
+    dirty="$(source_dirty)"
+    built_at="${PM_BUILT_AT:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
+
+    if is_true "${PM_OFFICIAL_BUILD:-}" || [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        official="true"
+    fi
+
+    if [[ "${official}" == "true" ]]; then
+        [[ "${dirty}" == "false" ]] \
+            || die "Official builds require a clean source tree"
+        [[ "${commit}" =~ ^[0-9A-Fa-f]{40,64}$ ]] \
+            || die "Official builds require a full source commit identifier; got ${commit@Q}"
+        build_id="${build}"
+    else
+        build_id="dev-${commit:0:12}"
+        [[ "${dirty}" == "true" ]] && build_id+="-dirty"
+    fi
+
+    mkdir -p -- "${site_dir}"
+    python3 - "${site_dir}/build-info.json" "${release}" "${build}" "${build_id}" "${official}" "${commit}" "${dirty}" "${built_at}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = {
+    "schemaVersion": 1,
+    "releaseVersion": sys.argv[2],
+    "buildNumber": sys.argv[3],
+    "buildId": sys.argv[4],
+    "officialBuild": sys.argv[5].lower() == "true",
+    "sourceCommit": sys.argv[6],
+    "sourceDirty": sys.argv[7].lower() == "true",
+    "builtAt": sys.argv[8],
+    "artifactSha256": None,
+    "builder": "Et al Solutions LLC",
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+try:
+    os.fchmod(fd, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary_name, path)
+    os.chmod(path, 0o644)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+}
+
+seal_build() {
+    local site_dir="$1"
+
+    [[ -r "${site_dir}/build-info.json" ]] \
+        || die "Cannot seal build; build-info.json is missing: ${site_dir}"
+
+    python3 - "${site_dir}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+site = Path(sys.argv[1]).resolve()
+build_path = site / "build-info.json"
+manifest_path = site / "artifact-manifest.json"
+excluded = {"build-info.json", "deploy-info.json", "artifact-manifest.json"}
+
+build = json.loads(build_path.read_text(encoding="utf-8"))
+build_for_digest = dict(build)
+build_for_digest["artifactSha256"] = None
+
+entries = []
+for path in sorted(site.rglob("*")):
+    if not path.is_file():
+        continue
+    rel = path.relative_to(site).as_posix()
+    if rel in excluded:
+        continue
+    data = path.read_bytes()
+    entries.append(
+        {
+            "path": rel,
+            "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    )
+
+canonical = hashlib.sha256()
+canonical.update(
+    json.dumps(build_for_digest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+)
+canonical.update(b"\n")
+for entry in entries:
+    canonical.update(
+        json.dumps(entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    canonical.update(b"\n")
+artifact_sha = canonical.hexdigest()
+
+build["artifactSha256"] = artifact_sha
+manifest = {
+    "schemaVersion": 1,
+    "algorithm": "sha256",
+    "scope": (
+        "All served files except build-info.json, deploy-info.json, and "
+        "artifact-manifest.json, plus canonical build identity."
+    ),
+    "artifactSha256": artifact_sha,
+    "files": entries,
+}
+
+
+def atomic_json(path: Path, payload: dict) -> None:
+    fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary_name, path)
+        os.chmod(path, 0o644)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+atomic_json(build_path, build)
+atomic_json(manifest_path, manifest)
+print(artifact_sha)
+PY
+}
+
+record_deployment() {
+    local site_dir="$1"
+    local environment="$2"
+    local deployment_id="$3"
+    local deployed_at=""
+
+    [[ -r "${site_dir}/build-info.json" ]] \
+        || die "Cannot record deployment; build-info.json is missing: ${site_dir}"
+    deployed_at="${PM_DEPLOYED_AT:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
+
+    if [[ -z "${deployment_id}" ]]; then
+        if [[ -n "${PM_DEPLOYMENT_ID:-}" ]]; then
+            deployment_id="${PM_DEPLOYMENT_ID}"
+        elif [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+            deployment_id="${environment}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+        else
+            deployment_id="${environment}-$(date -u +'%Y%m%dT%H%M%SZ')"
+        fi
+    fi
+
+    python3 - "${site_dir}/build-info.json" "${site_dir}/deploy-info.json" "${environment}" "${deployment_id}" "${deployed_at}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+build_path = Path(sys.argv[1])
+deploy_path = Path(sys.argv[2])
+build = json.loads(build_path.read_text(encoding="utf-8"))
+if not build.get("artifactSha256"):
+    raise SystemExit("build-info.json is not sealed; artifactSha256 is missing")
+
+payload = {
+    "schemaVersion": 1,
+    "environment": sys.argv[3],
+    "deploymentId": sys.argv[4],
+    "deployedAt": sys.argv[5],
+    "releaseVersion": build.get("releaseVersion"),
+    "buildNumber": build.get("buildNumber"),
+    "buildId": build.get("buildId"),
+    "sourceCommit": build.get("sourceCommit"),
+    "artifactSha256": build.get("artifactSha256"),
+    "verification": "verified",
+}
+fd, temporary_name = tempfile.mkstemp(prefix=deploy_path.name + ".", dir=str(deploy_path.parent))
+try:
+    os.fchmod(fd, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary_name, deploy_path)
+    os.chmod(deploy_path, 0o644)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+}
+
+verify_deployment() {
+    local site_dir="$1"
+
+    python3 - "${site_dir}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import stat
+import sys
+from pathlib import Path
+
+site = Path(sys.argv[1]).resolve()
+build_path = site / "build-info.json"
+deploy_path = site / "deploy-info.json"
+manifest_path = site / "artifact-manifest.json"
+excluded = {"build-info.json", "deploy-info.json", "artifact-manifest.json"}
+
+for path in (build_path, deploy_path, manifest_path):
+    if not path.is_file():
+        raise SystemExit(f"required metadata is missing: {path}")
+
+build = json.loads(build_path.read_text(encoding="utf-8"))
+deploy = json.loads(deploy_path.read_text(encoding="utf-8"))
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+for field in (
+    "releaseVersion",
+    "buildNumber",
+    "buildId",
+    "sourceCommit",
+    "artifactSha256",
+):
+    if build.get(field) != deploy.get(field):
+        raise SystemExit(f"deployment metadata mismatch for {field}")
+
+if deploy.get("verification") != "verified":
+    raise SystemExit("deployment metadata is not marked verified")
+if manifest.get("algorithm") != "sha256":
+    raise SystemExit("artifact manifest algorithm is not sha256")
+if manifest.get("artifactSha256") != build.get("artifactSha256"):
+    raise SystemExit("artifact manifest digest does not match build metadata")
+
+entries = []
+for path in sorted(site.rglob("*")):
+    if not path.is_file():
+        continue
+    rel = path.relative_to(site).as_posix()
+    if rel in excluded:
+        continue
+    data = path.read_bytes()
+    entries.append(
+        {
+            "path": rel,
+            "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    )
+
+if entries != manifest.get("files"):
+    raise SystemExit("artifact file inventory or file content does not match the manifest")
+
+build_for_digest = dict(build)
+build_for_digest["artifactSha256"] = None
+canonical = hashlib.sha256()
+canonical.update(
+    json.dumps(build_for_digest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+)
+canonical.update(b"\n")
+for entry in entries:
+    canonical.update(
+        json.dumps(entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    canonical.update(b"\n")
+
+artifact_sha = canonical.hexdigest()
+if artifact_sha != build.get("artifactSha256"):
+    raise SystemExit("artifact content digest does not match build metadata")
+
+print("verified")
+PY
+}
+
+cmd_current() {
+    validate_all
+
+    if [[ "${1:-}" == "--json" ]]; then
+        python3 - "$(release_version)" "$(build_number)" <<'PY'
+import json
+import sys
+
+print(
+    json.dumps(
+        {"releaseVersion": sys.argv[1], "buildNumber": sys.argv[2]},
+        indent=2,
+        sort_keys=True,
+    )
+)
+PY
+        return 0
+    fi
+
+    # Query command output is an intentional stdout API.
+    printf 'Release %s\nBuild %s\n' "$(release_version)" "$(build_number)"
+}
+
+cmd_release_bump() {
+    local kind="${1:-}"
+    local next=""
+
+    [[ "${kind}" == "major" || "${kind}" == "minor" || "${kind}" == "patch" ]] \
+        || die "Release bump requires major, minor, or patch"
+    validate_all
+
+    next="$(python3 - "$(release_version)" "${kind}" <<'PY'
+import sys
+
+version, kind = sys.argv[1], sys.argv[2]
+core = version.split("+", 1)[0].split("-", 1)[0]
+major, minor, patch = map(int, core.split("."))
+if kind == "major":
+    major, minor, patch = major + 1, 0, 0
+elif kind == "minor":
+    minor, patch = minor + 1, 0
+else:
+    patch += 1
+print(f"{major}.{minor}.{patch}")
+PY
+)"
+
+    atomic_write "${RELEASE_FILE}" "${next}"
+    mirror_version_files
+    validate_all
+    log INFO "Release advanced to ${next}"
+    emit_line "${next}"
+}
+
+cmd_build_allocate() {
+    local allow="false"
+    local arg=""
+    local next=""
+
+    for arg in "$@"; do
+        case "${arg}" in
+            --ci)
+                [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]] \
+                    || die "--ci requires CI=true or GITHUB_ACTIONS=true"
+                allow="true"
+                ;;
+            --allow-local)
+                allow="true"
+                ;;
+            *)
+                die "Unknown build allocate argument: ${arg}"
+                ;;
+        esac
+    done
+
+    is_true "${PM_VERSION_ALLOW_LOCAL_ALLOCATION:-}" && allow="true"
+    [[ "${allow}" == "true" ]] \
+        || die "Build allocation is restricted to CI; use --allow-local only for an intentional local allocator"
+
+    validate_all
+    next="$(python3 - "$(build_number)" <<'PY'
+import sys
+
+print(f"{int(sys.argv[1]) + 1:03d}")
+PY
+)"
+
+    atomic_write "${BUILD_FILE}" "${next}"
+    atomic_write "${COMPAT_FILE}" "${next}"
+    mirror_version_files
+    validate_all
+    log INFO "Build ${next} allocated"
+    emit_line "${next}"
+}
+
+require_site_dir_arg() {
+    local __out="$1"
+    local value=""
+    local arg=""
+    shift
+
+    while (($#)); do
+        arg="$1"
+        shift
+        case "${arg}" in
+            --site-dir)
+                (($#)) || die "--site-dir requires a value"
+                value="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: ${arg}"
+                ;;
+        esac
+    done
+
+    [[ -n "${value}" ]] || die "--site-dir is required"
+    [[ -d "${value}" ]] || die "Site directory does not exist: ${value}"
+    printf -v "${__out}" '%s' "$(cd -- "${value}" && pwd -P)"
+}
+
+cmd_build_finalize() {
+    local site_dir=""
+    local environment=""
+    local deployment_id=""
+    local arg=""
+
+    while (($#)); do
+        arg="$1"
+        shift
+        case "${arg}" in
+            --site-dir)
+                (($#)) || die "--site-dir requires a value"
+                site_dir="$1"
+                shift
+                ;;
+            --environment)
+                (($#)) || die "--environment requires a value"
+                environment="$1"
+                shift
+                ;;
+            --deployment-id)
+                (($#)) || die "--deployment-id requires a value"
+                deployment_id="$1"
+                shift
+                ;;
+            *)
+                die "Unknown build finalize argument: ${arg}"
+                ;;
+        esac
+    done
+
+    [[ -n "${site_dir}" ]] || die "--site-dir is required"
+    [[ -d "${site_dir}" ]] || die "Site directory does not exist: ${site_dir}"
+    site_dir="$(cd -- "${site_dir}" && pwd -P)"
+    environment="$(resolve_environment "${environment}")"
+
+    materialize_build "${site_dir}"
+    seal_build "${site_dir}" >/dev/null
+    record_deployment "${site_dir}" "${environment}" "${deployment_id}"
+    verify_deployment "${site_dir}" >/dev/null
+
+    log INFO "Finalized release $(release_version), build $(build_number), environment ${environment}"
+}
+
+cmd_deployment_record() {
+    local site_dir=""
+    local environment=""
+    local deployment_id=""
+    local arg=""
+
+    while (($#)); do
+        arg="$1"
+        shift
+        case "${arg}" in
+            --site-dir)
+                (($#)) || die "--site-dir requires a value"
+                site_dir="$1"
+                shift
+                ;;
+            --environment)
+                (($#)) || die "--environment requires a value"
+                environment="$1"
+                shift
+                ;;
+            --deployment-id)
+                (($#)) || die "--deployment-id requires a value"
+                deployment_id="$1"
+                shift
+                ;;
+            *)
+                die "Unknown deployment record argument: ${arg}"
+                ;;
+        esac
+    done
+
+    [[ -n "${site_dir}" ]] || die "--site-dir is required"
+    [[ -d "${site_dir}" ]] || die "Site directory does not exist: ${site_dir}"
+    site_dir="$(cd -- "${site_dir}" && pwd -P)"
+    environment="$(resolve_environment "${environment}")"
+
+    record_deployment "${site_dir}" "${environment}" "${deployment_id}"
+    verify_deployment "${site_dir}"
+    log INFO "Deployment metadata recorded for ${environment}"
+}
+
+main() {
+    local group="${1:-}"
+    local action="${2:-}"
+    local site_dir=""
+
+    case "${group}" in
+        current)
+            shift
+            [[ $# -le 1 ]] || die "Unknown current argument: ${2:-}"
+            [[ $# -eq 0 || "${1:-}" == "--json" ]] \
+                || die "Unknown current argument: ${1:-}"
+            cmd_current "$@"
+            ;;
+        validate)
+            [[ $# -eq 1 ]] || die "validate does not accept arguments"
+            validate_all
+            log INFO "Version metadata is valid"
+            emit_line "valid"
+            ;;
+        release)
+            shift
+            [[ "${1:-}" == "bump" ]] \
+                || die "Expected: pm-version release bump major|minor|patch"
+            shift
+            [[ $# -eq 1 ]] \
+                || die "Expected: pm-version release bump major|minor|patch"
+            cmd_release_bump "$@"
+            ;;
+        build)
+            shift
+            action="${1:-}"
+            shift || true
+            case "${action}" in
+                allocate)
+                    cmd_build_allocate "$@"
+                    ;;
+                meta)
+                    [[ $# -eq 0 || ( $# -eq 1 && "${1:-}" == "--emit-html" ) ]] \
+                        || die "Unknown build meta argument: ${1:-}"
+                    emit_meta_html
+                    ;;
+                materialize)
+                    require_site_dir_arg site_dir "$@"
+                    materialize_build "${site_dir}"
+                    log INFO "Build metadata materialized in ${site_dir}"
+                    ;;
+                seal)
+                    require_site_dir_arg site_dir "$@"
+                    seal_build "${site_dir}"
+                    ;;
+                finalize)
+                    cmd_build_finalize "$@"
+                    ;;
+                *)
+                    die "Unknown build action: ${action:-<missing>}"
+                    ;;
+            esac
+            ;;
+        deployment)
+            shift
+            action="${1:-}"
+            shift || true
+            case "${action}" in
+                record)
+                    cmd_deployment_record "$@"
+                    ;;
+                verify)
+                    require_site_dir_arg site_dir "$@"
+                    verify_deployment "${site_dir}"
+                    ;;
+                *)
+                    die "Unknown deployment action: ${action:-<missing>}"
+                    ;;
+            esac
+            ;;
+        -h|--help|help|"")
+            usage
+            ;;
+        *)
+            die "Unknown command: ${group}"
+            ;;
+    esac
+}
+
+# flock prevents two allocator processes in one workspace from racing. GitHub
+# Actions concurrency plus the early allocation commit provides cross-run order.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"${LOCK_FILE}"
+    flock 9
+fi
+
+main "$@"

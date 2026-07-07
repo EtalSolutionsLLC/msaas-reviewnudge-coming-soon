@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# GitHub Pages is provisioned by repository settings / GitHub Actions.
+# This adapter intentionally performs no external mutation here.
+log INFO "GitHub adapter provision step: no-op (Pages is configured in GitHub)."

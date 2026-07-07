@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+
+rt() {
+    local perform_readiness_check=false
+    local args=()
+
+    # Parse args and strip our custom flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --perform_readiness_check)
+            perform_readiness_check=true
+            ;;
+            *)
+            args+=("$1")
+            ;;
+        esac
+        shift
+    done
+
+    if (( perform_readiness_check )); then
+        command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not found"; fatal 1; }
+    fi
+
+    local service="${SERVICE_NAME:-${STACK}}"
+
+    # Cache key for this Cloud Run service
+    local cache_key="${DEPLOYMENT_ID}:${REGION}:${service}"
+
+    # Global cache vars (not declared local on purpose)
+    #   __GCS_WP_URL_CACHE      - cached URL
+    #   __GCS_WP_URL_CACHE_KEY  - cache key it was derived from
+    local wp_url
+
+    if [[ -n "${__GCS_WP_URL_CACHE:-}" && "${__GCS_WP_URL_CACHE_KEY:-}" == "${cache_key}" ]]; then
+        # Use cached URL
+        wp_url="${__GCS_WP_URL_CACHE}"
+    else
+        # Resolve Cloud Run URL and cache it
+        wp_url="$(gcloud run services describe "${service}" \
+        --region="${REGION}" \
+        --project="${DEPLOYMENT_ID}" \
+        --format='value(status.url)')"
+
+        if [[ -z "${wp_url}" ]]; then
+            echo "ERROR: could not resolve Cloud Run URL for ${service} in ${REGION}/${DEPLOYMENT_ID}" >&2
+            fatal 1
+        fi
+
+        __GCS_WP_URL_CACHE="${wp_url}"
+        __GCS_WP_URL_CACHE_KEY="${cache_key}"
+    fi
+
+    local -a cmd=(wp --url="${wp_url}" "${args[@]}")
+    log_cmd "${cmd[@]}"
+    "${cmd[@]}"
+}
+

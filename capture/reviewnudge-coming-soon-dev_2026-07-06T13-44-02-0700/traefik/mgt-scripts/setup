@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+. "${PORTMASON_SHARE}/pm-helpers"
+
+# CERT_DIR="$SITE_DIR/certs"
+# DYN_DIR="$SITE_DIR/dynamic"
+# CERTS_OUT="$SITE_DIR/out-certs"
+# DASH_HOST="$APP_HOST"
+
+# if ! command -v "${SYS_SCRIPT_DIR}/sys-gen-sslcert" >/dev/null 2>&1; then
+#   echo "ERROR: sys-gen-sslcert not found in PATH. Install it to ~/.local/bin first." >&2
+#   exit 1
+# fi
+
+# mkdir -p "$CERT_DIR" "$CERTS_OUT"
+
+# echo "==> Ensuring CA exists and issuing dashboard cert for $DASH_HOST ..."
+# sys-gen-sslcert -o "$CERT_DIR" --cn "$DASH_HOST" -f
+
+# STEM="$(echo "$DASH_HOST" | sed 's/\*/wildcard/g; s/[ /]/_/g; s/\//_/g')"
+# FULLCHAIN="$CERT_DIR/$STEM.fullchain.crt"
+# KEY="$CERT_DIR/$STEM.key"
+
+# if [[ ! -f "$FULLCHAIN" || ! -f "$KEY" ]]; then
+#   echo "ERROR: Expected $FULLCHAIN and/or $KEY not found."
+#   exit 1
+# fi
+
+# SITE_CERT_YML="$CERTS_OUT/$STEM.yml"
+# cat > "$SITE_CERT_YML" <<YAML
+# tls:
+#   certificates:
+#     - certFile: /certs/$(basename "$FULLCHAIN")
+#       keyFile:  /certs/$(basename "$KEY")
+# YAML
+
+# # Touch to trigger reload
+# touch "$DYN_DIR/dashboard.yml"
+
+echo "Bootstrap complete."
+
+echo "==> Starting Traefik ..."
+docker compose -f "${SITE_DIR}/docker-compose.yml" up -d
+echo "Traefik is up. Visit: $SITE_URL"

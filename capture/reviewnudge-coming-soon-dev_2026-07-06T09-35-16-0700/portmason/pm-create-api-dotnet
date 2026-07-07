@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+
+main() {
+    local project_name="${1:?Missing required argument: project_name}"
+    local project_dir="$(printf '%s' "${project_name}" | tr '[:upper:]' '[:lower:]')"
+
+    mkdir -p "${project_dir}"
+    cd "${project_dir}"
+
+    dotnet new sln -n "${project_name}"
+
+    mkdir -p src tests
+
+    dotnet new webapi -n "${project_name}.Api" -o "src/${project_name}.Api"
+    dotnet new xunit -n "${project_name}.Tests" -o "tests/${project_name}.Tests"
+
+    dotnet sln add "src/${project_name}.Api/${project_name}.Api.csproj"
+    dotnet sln add "tests/${project_name}.Tests/${project_name}.Tests.csproj"
+
+    dotnet add "tests/${project_name}.Tests/${project_name}.Tests.csproj" reference \
+    "src/${project_name}.Api/${project_name}.Api.csproj"
+
+    mkdir -p \
+    "src/${project_name}.Api/Controllers" \
+    "src/${project_name}.Api/Data" \
+    "src/${project_name}.Api/Dtos" \
+    "src/${project_name}.Api/Models" \
+    "src/${project_name}.Api/Repositories" \
+    "src/${project_name}.Api/Services"
+
+    dotnet add "src/${project_name}.Api/${project_name}.Api.csproj" package Microsoft.EntityFrameworkCore
+    dotnet add "src/${project_name}.Api/${project_name}.Api.csproj" package Microsoft.EntityFrameworkCore.InMemory
+    dotnet add "src/${project_name}.Api/${project_name}.Api.csproj" package Microsoft.EntityFrameworkCore.SqlServer
+    dotnet add "tests/${project_name}.Tests/${project_name}.Tests.csproj" package Microsoft.EntityFrameworkCore.InMemory
+
+    dotnet restore
+    dotnet build
+}
+
+main "$@"

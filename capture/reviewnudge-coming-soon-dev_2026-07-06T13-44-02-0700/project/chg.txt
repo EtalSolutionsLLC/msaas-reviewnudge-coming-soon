@@ -1,0 +1,7 @@
+project/www/index.html
+project/www/.nojekyll
+project/www/assets/waitlist-config.js
+project/www/assets/waitlist.js
+project/docker-compose.yml
+project/README.md
+project/chg.txt

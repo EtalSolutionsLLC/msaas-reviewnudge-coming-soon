@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#d7dee1" />
+  <meta name="description" content="ReviewNudge is getting ready to help service businesses turn a job well done into an honest review with one thoughtful nudge and an optional follow-up." />
+  <title>ReviewNudge · Coming Soon</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --brand-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --pm-foundation: #d7dee1;
+      --pm-foundation-raised: #f4f7f8;
+      --pm-foundation-soft: #a8b4b9;
+      --pm-foundation-text: #17313a;
+      --pm-steel: #334e57;
+      --pm-steel-muted: #96aab1;
+      --brand-background-start: #eaf5f2;
+      --brand-background-middle: #f9fcfb;
+      --brand-background-end: #dcebe8;
+      --brand-surface: rgba(255, 255, 255, 0.94);
+      --brand-surface-strong: #ffffff;
+      --brand-surface-subtle: #f2f7f6;
+      --brand-surface-tint: #e6f2ef;
+      --brand-input-background: #ffffff;
+      --brand-text: #153039;
+      --brand-text-muted: #64787f;
+      --brand-text-soft: #38545c;
+      --brand-accent: #176fda;
+      --brand-accent-hover: #115ab2;
+      --brand-accent-soft: rgba(23, 111, 218, 0.16);
+      --brand-service: #0b8178;
+      --brand-service-dark: #09675f;
+      --brand-service-soft: #ddf2ee;
+      --brand-review: #f2b544;
+      --brand-review-dark: #b97808;
+      --brand-review-soft: #fff0c9;
+      --brand-highlight: #0b8178;
+      --brand-success: #17825f;
+      --brand-success-soft: #dff3eb;
+      --brand-danger: #ad4141;
+      --brand-badge-background: #ddf2ee;
+      --brand-badge-text: #09675f;
+      --brand-toast-background: #0d2631;
+      --brand-toast-border: #77b8d1;
+      --brand-toast-text: #f8fbfc;
+      --brand-border: rgba(52, 82, 91, 0.22);
+      --brand-border-input: rgba(52, 82, 91, 0.34);
+      --brand-border-subtle: rgba(52, 82, 91, 0.14);
+      --brand-grid-line: rgba(255, 255, 255, 0.08);
+      --brand-overlay-soft: rgba(255, 255, 255, 0.72);
+      --brand-overlay-dark: rgba(7, 24, 32, 0.74);
+      --brand-shadow: 0 30px 90px rgba(28, 59, 67, 0.18);
+      --brand-shadow-soft: 0 16px 42px rgba(28, 59, 67, 0.11);
+      --brand-shadow-button: 0 10px 24px rgba(23, 111, 218, 0.24);
+      --brand-shadow-review: 0 12px 28px rgba(183, 120, 8, 0.18);
+      --brand-primary-gradient: linear-gradient(145deg, #176fda, #0b8178);
+      --brand-service-gradient: linear-gradient(145deg, #0b8178, #09675f);
+      --brand-review-gradient: linear-gradient(145deg, #ffd87d, #f2b544);
+      --brand-steel-gradient: linear-gradient(180deg, #f8fafb 0%, #c8d0d3 44%, #9da9ae 52%, #e9edef 100%);
+      --brand-steel-grain: repeating-linear-gradient(90deg, rgba(255,255,255,.20) 0 1px, rgba(23,49,58,.04) 1px 3px, transparent 3px 7px);
+      --brand-background-gradient: linear-gradient(145deg, #eaf5f2, #f9fcfb 48%, #dcebe8);
+      --brand-foundation-gradient: linear-gradient(180deg, #f8fafb 0%, #c8d0d3 44%, #9da9ae 52%, #e9edef 100%);
+      --brand-radius-small: 8px;
+      --brand-radius-control: 11px;
+      --brand-radius-card: 18px;
+      --brand-radius-panel: 28px;
+      --brand-radius-large: 38px;
+      --brand-radius-pill: 999px;
+      --pm-topbar-target-height: 60px;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-height: 100%; overflow-y: scroll; scrollbar-gutter: stable; font-family: var(--brand-font-family); }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% 8%, var(--brand-overlay-soft), transparent 28%),
+        radial-gradient(circle at 87% 14%, var(--brand-accent-soft), transparent 25%),
+        radial-gradient(circle at 77% 88%, var(--brand-service-soft), transparent 34%),
+        var(--brand-background-gradient);
+      color: var(--brand-text);
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: auto -18vw -34vw auto;
+      width: 62vw;
+      height: 62vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(242, 181, 68, 0.22), transparent 62%);
+      pointer-events: none;
+    }
+    a { color: inherit; }
+    h1, h2, h3, p { margin-top: 0; }
+    button, input { font: inherit; }
+    .skip-link {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      transform: translateY(-160%);
+      border-radius: var(--brand-radius-control);
+      background: var(--brand-surface-strong);
+      color: var(--brand-text);
+      padding: 10px 14px;
+      font-weight: 800;
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .app-frame { min-height: 100vh; }
+    .app-frame::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 29;
+      height: 88px;
+      pointer-events: none;
+      background: rgba(244, 248, 249, 0.72);
+      backdrop-filter: blur(18px) saturate(118%);
+    }
+    .topbar {
+      position: sticky;
+      top: 8px;
+      z-index: 30;
+      isolation: isolate;
+      contain: layout;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      width: min(1240px, calc(100% - 28px));
+      min-height: 64px;
+      margin: 8px auto 0;
+      padding: 7px 11px 7px 8px;
+      border: 1px solid rgba(73, 92, 99, 0.46);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgb(205 214 218) 0%, rgb(245 248 249) 7%, rgb(255 255 255) 19%, rgb(236 241 243) 35%, rgb(198 209 213) 54%, rgb(174 188 193) 69%, rgb(223 230 232) 83%, rgb(252 253 253) 93%, rgb(211 220 223) 100%);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), inset 0 8px 18px rgba(255, 255, 255, 0.24), inset 0 -2px 4px rgba(48, 67, 74, 0.10), 0 5px 14px rgba(21, 48, 57, 0.11);
+      color: var(--pm-foundation-text);
+    }
+    .product-lockup {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      flex: 0 0 auto;
+      color: inherit;
+      text-decoration: none;
+    }
+    .product-mark { width: 42px; height: 42px; filter: drop-shadow(var(--brand-shadow-soft)); }
+    .product-identity { display: grid; gap: 1px; }
+    .product-identity strong { font-size: 20px; letter-spacing: -0.025em; }
+    .product-identity small { color: var(--pm-steel); font-size: 10px; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; }
+    .public-nav { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .public-nav a, .button-quiet {
+      border-radius: var(--brand-radius-control);
+      color: var(--pm-steel);
+      font-size: 14px;
+      font-weight: 750;
+      padding: 9px 11px;
+      text-decoration: none;
+    }
+    .public-nav a:hover, .button-quiet:hover { background: var(--brand-grid-line); color: var(--pm-foundation-text); }
+    .topbar-actions { display: flex; align-items: center; gap: 8px; }
+    .button, button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      border: 0;
+      border-radius: var(--brand-radius-control);
+      cursor: pointer;
+      font-weight: 850;
+      padding: 12px 17px;
+      text-decoration: none;
+      transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+    .button:hover, button:hover { transform: translateY(-1px); }
+    .button-primary, button { background: var(--brand-primary-gradient); box-shadow: var(--brand-shadow-button); color: var(--brand-surface-strong); }
+    .button-secondary {
+      border: 1px solid var(--brand-border-input);
+      background: var(--brand-surface-strong);
+      box-shadow: none;
+      color: var(--brand-text);
+    }
+    .button-quiet { background: transparent; box-shadow: none; }
+    .button-compact { min-height: 40px; padding: 10px 14px; }
+    .shell { width: min(1240px, calc(100% - 28px)); margin: 0 auto; padding: 34px 0 64px; }
+    .coming-soon-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(390px, 0.92fr);
+      gap: clamp(30px, 5vw, 74px);
+      align-items: center;
+      min-height: calc(100vh - 106px);
+      padding: clamp(32px, 7vw, 86px) clamp(4px, 3vw, 34px) 54px;
+    }
+    .hero-copy { position: relative; z-index: 1; }
+    .eyebrow, .section-kicker, .workflow-step {
+      color: var(--brand-highlight);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+    .eyebrow, .section-kicker { display: block; margin-bottom: 10px; }
+    .signal-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 8px;
+      border-radius: var(--brand-radius-pill);
+      background: var(--brand-review);
+      box-shadow: var(--brand-shadow-review);
+    }
+    h1 {
+      max-width: 850px;
+      margin-bottom: 18px;
+      font-size: clamp(44px, 6.35vw, 82px);
+      line-height: 0.98;
+      letter-spacing: -0.052em;
+    }
+    .lede {
+      max-width: 700px;
+      color: var(--brand-text-soft);
+      font-size: 18px;
+      line-height: 1.65;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 16px; }
+    .offer-line { color: var(--brand-text-muted); font-size: 14px; line-height: 1.55; }
+    .offer-line strong { color: var(--brand-text); }
+    .service-fit { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+    .service-fit span {
+      border: 1px solid var(--brand-border-subtle);
+      border-radius: var(--brand-radius-pill);
+      background: var(--brand-surface-strong);
+      color: var(--brand-text-soft);
+      padding: 8px 11px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .launch-card, .mini-card, .preview-frame {
+      border: 1px solid var(--brand-border);
+      background: var(--brand-surface);
+      box-shadow: var(--brand-shadow-soft);
+      backdrop-filter: blur(18px);
+    }
+    .launch-card {
+      position: relative;
+      overflow: hidden;
+      width: min(520px, 100%);
+      justify-self: end;
+      border-radius: var(--brand-radius-panel);
+      box-shadow: var(--brand-shadow);
+      padding: clamp(26px, 4vw, 42px);
+    }
+    .launch-rail {
+      position: absolute;
+      inset: 0 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 0.7fr;
+      height: 7px;
+    }
+    .launch-rail span:nth-child(1) { background: var(--brand-service); }
+    .launch-rail span:nth-child(2) { background: var(--brand-accent); }
+    .launch-rail span:nth-child(3) { background: var(--brand-review); }
+    .launch-card h2 {
+      margin-bottom: 12px;
+      font-size: clamp(28px, 3.8vw, 48px);
+      line-height: 1.05;
+      letter-spacing: -0.035em;
+    }
+    .launch-card p { color: var(--brand-text-soft); line-height: 1.65; }
+    .waitlist-form { display: grid; gap: 12px; margin: 22px 0 20px; }
+    .field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    label { display: block; margin-bottom: 7px; color: var(--brand-text-soft); font-size: 14px; font-weight: 750; }
+    input {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--brand-border-input);
+      border-radius: var(--brand-radius-control);
+      background: var(--brand-input-background);
+      color: var(--brand-text);
+      padding: 13px 14px;
+    }
+    input::placeholder { color: var(--brand-text-muted); opacity: 0.38; }
+    input:focus, button:focus-visible, a:focus-visible { outline: 3px solid var(--brand-accent-soft); outline-offset: 2px; }
+
+    .form-status {
+      min-height: 24px;
+      margin: 6px 0 14px;
+      color: var(--brand-text-muted);
+      font-size: 14px;
+      font-weight: 750;
+      line-height: 1.45;
+    }
+    .form-status[data-state="success"] { color: var(--brand-success); }
+    .form-status[data-state="error"] { color: var(--brand-danger); }
+    .launch-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 30px calc(clamp(26px, 4vw, 42px) * -1) calc(clamp(26px, 4vw, 42px) * -1);
+      border-top: 1px solid var(--brand-border-subtle);
+      background: var(--brand-surface-subtle);
+    }
+    .launch-meta span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 62px;
+      padding: 14px;
+      color: var(--brand-text-soft);
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+    }
+    .launch-meta span + span { border-left: 1px solid var(--brand-border-subtle); }
+    .assurance-mark {
+      display: inline-grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border-radius: var(--brand-radius-pill);
+      background: var(--brand-badge-background);
+      color: var(--brand-badge-text);
+      font-style: normal;
+    }
+    .below-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 10px;
+    }
+    .pm-viewport-target {
+      min-height: var(--pm-usable-vh, auto);
+      align-content: center;
+      scroll-margin-top: var(--pm-header-h, 0px);
+    }
+    .mini-card {
+      min-height: 188px;
+      border-radius: var(--brand-radius-panel);
+      padding: 26px;
+    }
+    .mini-card strong { display: block; margin-bottom: 10px; font-size: 20px; }
+    .mini-card p { margin-bottom: 0; color: var(--brand-text-muted); line-height: 1.6; }
+    .workflow-step { display: block; margin-bottom: 8px; }
+    .preview-frame {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 0.8fr) minmax(340px, 1.2fr);
+      gap: clamp(24px, 5vw, 58px);
+      align-items: center;
+      overflow: hidden;
+      border-radius: var(--brand-radius-panel);
+      background: radial-gradient(circle at 86% 18%, var(--brand-accent-soft), transparent 30%), var(--brand-surface);
+      padding: clamp(28px, 5vw, 56px);
+    }
+    .preview-copy p { color: var(--brand-text-soft); line-height: 1.65; }
+    .preview-window {
+      border: 1px solid var(--brand-grid-line);
+      border-radius: var(--brand-radius-panel);
+      background: repeating-linear-gradient(90deg, transparent 0, transparent 56px, var(--brand-grid-line) 57px), var(--brand-foundation-gradient);
+      box-shadow: var(--brand-shadow);
+      color: var(--pm-foundation-text);
+      padding: 16px;
+    }
+    .preview-toolbar, .preview-nudge, .preview-list article, .preview-metrics article {
+      border: 1px solid var(--brand-grid-line);
+      border-radius: var(--brand-radius-card);
+      background: var(--brand-overlay-dark);
+      color: var(--brand-surface-strong);
+    }
+    .preview-toolbar, .preview-nudge { display: flex; align-items: center; justify-content: space-between; }
+    .preview-toolbar { padding: 14px 16px; font-weight: 850; }
+    .preview-toolbar i {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 8px;
+      border-radius: var(--brand-radius-pill);
+      background: var(--brand-service);
+    }
+    .preview-status, .status-pill { border-radius: var(--brand-radius-pill); padding: 5px 9px; font-size: 11px; font-weight: 900; }
+    .preview-status { background: var(--brand-service-soft); color: var(--brand-service-dark); }
+    .preview-metrics { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+    .preview-metrics article { flex: 1; display: grid; padding: 14px; }
+    .preview-metrics small, .preview-list small, .preview-nudge small { color: var(--pm-steel-muted); }
+    .preview-metrics strong { margin-top: 4px; font-size: 28px; }
+    .preview-list { display: grid; gap: 8px; }
+    .preview-list article { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 12px; }
+    .avatar, .review-spark {
+      display: inline-grid;
+      place-items: center;
+      border-radius: var(--brand-radius-control);
+      background: var(--brand-steel-gradient);
+      color: var(--pm-foundation);
+      font-weight: 900;
+    }
+    .avatar { width: 38px; height: 38px; }
+    .review-spark { width: 42px; height: 42px; background: var(--brand-review-gradient); color: var(--brand-review-dark); }
+    .status-pill.ready { background: var(--brand-review-soft); color: var(--brand-review-dark); }
+    .status-pill.sent { background: var(--brand-accent-soft); color: var(--brand-accent); }
+    .status-pill.reviewed { background: var(--brand-success-soft); color: var(--brand-success); }
+    .preview-nudge { gap: 12px; margin-top: 12px; padding: 14px; }
+    .preview-nudge > div { display: grid; flex: 1; gap: 3px; }
+    .site-footer {
+      margin-top: 28px;
+      border: 1px solid var(--brand-border);
+      border-radius: var(--brand-radius-panel);
+      background: var(--brand-surface);
+      box-shadow: var(--brand-shadow-soft);
+      color: var(--brand-text-muted);
+      padding: 20px 24px;
+      text-align: center;
+    }
+    @media (max-width: 920px) {
+      .coming-soon-grid, .preview-frame { grid-template-columns: 1fr; }
+      .launch-card { justify-self: stretch; width: 100%; }
+      .below-grid { grid-template-columns: 1fr; }
+      .public-nav { display: none; }
+    }
+    @media (max-width: 640px) {
+      .app-frame::before { display: none; }
+      .topbar { position: static; gap: 12px; }
+      .topbar-actions .button-quiet { display: none; }
+      .coming-soon-grid { min-height: auto; padding-top: 42px; }
+      .field-row { grid-template-columns: 1fr; }
+      .launch-meta { grid-template-columns: 1fr; }
+      .launch-meta span + span { border-left: 0; border-top: 1px solid var(--brand-border-subtle); }
+      h1 { font-size: clamp(42px, 14vw, 64px); }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">Skip to the good stuff</a>
+  <div class="app-frame">
+    <header class="topbar" data-pm-sticky-header="">
+      <a aria-label="ReviewNudge home" class="product-lockup" href="#mainContent">
+        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="ReviewNudge mark">
+          <defs>
+            <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.48" stop-color="#d7e0e6"/><stop offset="1" stop-color="#9aa8b2"/></linearGradient>
+            <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1687ff"/><stop offset="1" stop-color="#075fc4"/></linearGradient>
+          </defs>
+          <rect x="8" y="10" width="72" height="62" rx="20" fill="url(#steel)" stroke="#7f8e99" stroke-width="2"/>
+          <path d="M29 35h30M29 47h22" fill="none" stroke="#24323d" stroke-width="6" stroke-linecap="round"/>
+          <path d="M59 69l14 15 2-19" fill="url(#blue)" stroke="#075fc4" stroke-width="2" stroke-linejoin="round"/>
+          <circle cx="70" cy="26" r="10" fill="#f2b84b"/>
+          <path d="M70 20.5l1.7 3.4 3.8.6-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" fill="#fff8e6"/>
+        </svg>
+        <span class="product-identity">
+          <strong>ReviewNudge<span aria-hidden="true">™</span></strong>
+          <small>Built on Portmason<span aria-hidden="true">™</span></small>
+        </span>
+      </a>
+      <nav aria-label="Primary navigation" class="public-nav">
+        <a href="#preview">Preview</a>
+        <a href="#updates">Updates</a>
+        <a href="#early-access">Early access</a>
+      </nav>
+      <div class="topbar-actions">
+        <a class="button button-quiet" href="mailto:hello@reviewnudge.local">Contact</a>
+        <a class="button button-primary button-compact" href="#early-access">Join waitlist</a>
+      </div>
+    </header>
+
+    <main class="shell pm-viewport-target" id="mainContent" data-pm-viewport-target>
+      <section class="coming-soon-grid pm-viewport-target" aria-labelledby="pageTitle" data-pm-viewport-target>
+        <div class="hero-copy">
+          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span>Coming soon for service businesses</p>
+          <h1 id="pageTitle">A thoughtful nudge for more honest reviews.</h1>
+          <p class="lede">ReviewNudge is getting ready to help local service teams ask at the right moment, follow up gently, and keep review requests organized without turning good customer relationships into awkward chores.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#early-access">Request early access</a>
+            <a class="button button-secondary" href="#preview">See what’s coming</a>
+          </div>
+          <p class="offer-line"><strong>Founding access is opening soon.</strong><br />One clean workspace for customer nudges, review links, follow-ups, and status visibility.</p>
+          <div aria-label="Made for service businesses" class="service-fit">
+            <span>Home services</span>
+            <span>Local professionals</span>
+            <span>Small teams</span>
+          </div>
+        </div>
+
+        <section class="launch-card" id="early-access" aria-labelledby="earlyAccessTitle" data-pm-viewport-target>
+          <div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
+          <p class="section-kicker">Early access list</p>
+          <h2 id="earlyAccessTitle">Be first in line.</h2>
+          <p>Leave your email and I’ll let you know when ReviewNudge is ready for founding customers.</p>
+          <form class="waitlist-form" data-waitlist-form novalidate>
+            <label for="email">Email address</label>
+            <div class="field-row">
+              <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required />
+              <button type="submit">Notify me</button>
+            </div>
+          </form>
+          <p class="form-status" data-waitlist-status role="status" aria-live="polite"></p>
+          <p class="offer-line">No spam. No noisy launch sequence. Just a heads-up when the doors open.</p>
+          <footer aria-label="Product assurances" class="launch-meta">
+            <span><i aria-hidden="true" class="assurance-mark">✓</i>No card for early access</span>
+            <span><i aria-hidden="true" class="assurance-mark">✓</i>Built for practical workflows</span>
+          </footer>
+        </section>
+      </section>
+
+      <section class="below-grid pm-viewport-target" id="updates" aria-label="What is coming" data-pm-viewport-target>
+        <article class="mini-card">
+          <span class="workflow-step">01</span>
+          <strong>Ask while the work is fresh</strong>
+          <p>Send a review request right after a job is complete, while the customer still remembers the good experience.</p>
+        </article>
+        <article class="mini-card">
+          <span class="workflow-step">02</span>
+          <strong>Follow up without pestering</strong>
+          <p>Keep reminders gentle, visible, and organized so nobody has to rely on memory or sticky notes.</p>
+        </article>
+        <article class="mini-card">
+          <span class="workflow-step">03</span>
+          <strong>Know what happened</strong>
+          <p>Track who is ready, who was nudged, who needs a reminder, and who already left feedback.</p>
+        </article>
+      </section>
+
+      <section class="preview-frame pm-viewport-target" id="preview" aria-labelledby="previewTitle" data-pm-viewport-target>
+          <div class="preview-copy">
+            <p class="section-kicker">Product preview</p>
+            <h2 id="previewTitle">The workflow stays simple on purpose.</h2>
+            <p>ReviewNudge is designed around the small operational moments that get missed: completed jobs, happy customers, pending asks, and the follow-up that should feel human instead of automated sludge.</p>
+            <div class="hero-actions">
+              <a class="button button-secondary" href="#early-access">Join the waitlist</a>
+            </div>
+          </div>
+
+          <div class="preview-window" aria-label="ReviewNudge dashboard preview mockup">
+            <div class="preview-toolbar"><span><i aria-hidden="true"></i>Today’s nudges</span><span class="preview-status">3 ready</span></div>
+            <div class="preview-metrics">
+              <article><small>Requests queued</small><strong>18</strong></article>
+              <article><small>Follow-ups due</small><strong>4</strong></article>
+              <article><small>Reviews captured</small><strong>12</strong></article>
+            </div>
+            <div class="preview-list">
+              <article><span class="avatar">AC</span><div><strong>Acme Plumbing</strong><small>Kitchen repair completed yesterday</small></div><span class="status-pill ready">Ready</span></article>
+              <article><span class="avatar">JM</span><div><strong>Jordan M.</strong><small>First nudge sent this morning</small></div><span class="status-pill sent">Sent</span></article>
+              <article><span class="avatar">SL</span><div><strong>Sunlit HVAC</strong><small>Review link clicked</small></div><span class="status-pill reviewed">Reviewed</span></article>
+            </div>
+            <div class="preview-nudge"><span class="review-spark">★</span><div><strong>Gentle reminder prepared</strong><small>Friendly, short, and tied to the service visit.</small></div></div>
+          </div>
+      </section>
+
+      <footer class="site-footer">
+        ReviewNudge™ is preparing for launch. Built with the current ReviewNudge stylesheet tokens for straightforward implementation.
+      </footer>
+    </main>
+  </div>
+  <script src="assets/waitlist-config.js"></script>
+  <script src="assets/waitlist.js"></script>
+  <script type="module">
+    import { bindViewportNavigation } from "./assets/pm-viewport-navigation.js";
+
+    bindViewportNavigation(document, {
+      headerSelector: "[data-pm-sticky-header]"
+    });
+  </script>
+</body>
+</html>

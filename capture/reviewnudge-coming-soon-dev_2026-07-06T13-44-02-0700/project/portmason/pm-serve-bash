@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PORT="${PM_SERVE_PORT:-8000}"
+HOST="${PM_SERVE_HOST:-127.0.0.1}"
+server_pid=""
+
+usage() {
+  printf 'Usage:\n'
+  printf '  pm-serve-bash\n'
+  printf '  pm-serve-bash path/to/file.html\n'
+}
+
+cleanup() {
+  if [[ -n "${server_pid:-}" ]] && kill -0 "$server_pid" 2>/dev/null; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+}
+
+port_in_use() {
+  python3 - "$HOST" "$PORT" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.settimeout(0.25)
+    sys.exit(0 if sock.connect_ex((host, port)) == 0 else 1)
+PY
+}
+
+find_index() {
+  find . -name index.html -print | sort | head -n 1
+}
+
+trap cleanup EXIT INT TERM
+
+if [[ $# -gt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'ERROR: python3 is required.\n' >&2
+  exit 2
+fi
+
+if port_in_use; then
+  printf 'ERROR: port %s is already in use on %s.\n' "$PORT" "$HOST" >&2
+  printf 'Try:\n' >&2
+  printf '  PM_SERVE_PORT=8001 pm-serve-bash\n' >&2
+  printf 'Or find the process:\n' >&2
+  printf '  ss -ltnp | grep ":%s"\n' "$PORT" >&2
+  exit 1
+fi
+
+if [[ $# -eq 0 ]]; then
+  html_file="$(find_index)"
+  if [[ -z "$html_file" ]]; then
+    printf 'ERROR: no index.html found under current directory.\n' >&2
+    exit 1
+  fi
+else
+  html_file="$1"
+  if [[ ! -f "$html_file" ]]; then
+    printf 'ERROR: HTML file not found: %s\n' "$html_file" >&2
+    exit 1
+  fi
+fi
+
+html_dir="$(cd -- "$(dirname -- "$html_file")" && pwd -P)"
+html_name="$(basename -- "$html_file")"
+
+cd -- "$html_dir"
+
+url="http://localhost:${PORT}/${html_name}"
+
+printf 'Serving: %s/%s\n' "$html_dir" "$html_name"
+printf 'URL:     %s\n' "$url"
+printf 'Stop:    Ctrl+C\n\n'
+
+python3 -m http.server "$PORT" --bind "$HOST" &
+server_pid=$!
+
+sleep 1
+
+if command -v wslview >/dev/null 2>&1; then
+  wslview "$url" >/dev/null 2>&1 || true
+elif command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "$url" >/dev/null 2>&1 || true
+elif command -v open >/dev/null 2>&1; then
+  open "$url" >/dev/null 2>&1 || true
+fi
+
+wait "$server_pid"
