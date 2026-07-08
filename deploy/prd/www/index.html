@@ -186,14 +186,14 @@
     }
     .button-quiet { background: transparent; box-shadow: none; }
     .button-compact { min-height: 40px; padding: 10px 14px; }
-    .shell { width: min(1240px, calc(100% - 28px)); margin: 0 auto; padding: 34px 0 64px; }
+    .shell { width: min(1240px, calc(100% - 28px)); margin: 0 auto; padding: 11px 0 64px; }
     .coming-soon-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(390px, 0.92fr);
       gap: clamp(30px, 5vw, 74px);
       align-items: center;
       min-height: calc(100vh - 106px);
-      padding: clamp(32px, 7vw, 86px) clamp(4px, 3vw, 34px) 54px;
+      padding: clamp(11px, 2.33vw, 29px) clamp(4px, 3vw, 34px) 54px;
     }
     .hero-copy { position: relative; z-index: 1; }
     .eyebrow, .section-kicker, .workflow-step {
@@ -424,13 +424,14 @@
       .app-frame::before { display: none; }
       .topbar { position: static; gap: 12px; }
       .topbar-actions .button-quiet { display: none; }
-      .coming-soon-grid { min-height: auto; padding-top: 42px; }
+      .coming-soon-grid { min-height: auto; padding-top: 14px; }
       .field-row { grid-template-columns: 1fr; }
       .launch-meta { grid-template-columns: 1fr; }
       .launch-meta span + span { border-left: 0; border-top: 1px solid var(--brand-border-subtle); }
       h1 { font-size: clamp(42px, 14vw, 64px); }
     }
   </style>
+  <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to the good stuff</a>
@@ -548,12 +549,12 @@
       </section>
 
       <footer class="site-footer">
-        ReviewNudge™ is preparing for launch. Built with the current ReviewNudge stylesheet tokens for straightforward implementation.
+        ReviewNudge™ is preparing for launch. Add your email to the waitlist or check back here in a day or so.
       </footer>
     </main>
   </div>
-  <script src="assets/waitlist-config.js"></script>
-  <script src="assets/waitlist.js"></script>
+  <script src="./assets/waitlist-config.js"></script>
+  <script src="./assets/waitlist.js"></script>
   <script type="module">
     import { bindViewportNavigation } from "./assets/pm-viewport-navigation.js";
 

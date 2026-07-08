@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deprecated compatibility wrapper. New workflows use pm-helpers-postgres,
+# selected from DB_PROVIDER_PLATFORM_CODE by pm-helpers-db.
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+
+log WARN "pm-db-postgres is deprecated; use DB_PROVIDER_PLATFORM_CODE and pm-helpers-postgres"
+# shellcheck disable=SC1090
+. "${PORTMASON_SHARE}/pm-helpers-postgres"
+pm_db_provider_prepare "$@"

@@ -13,9 +13,9 @@
   "PROJECT_ID": "reviewnudge-coming--1777712786",
   "RUNTIME_ADAPTER_CODE": "bash-local",
   "STACK": "reviewnudge-coming-soon-dev",
-  "TRAEFIK_ENTRYPOINT": "web",
+  "TRAEFIK_ENTRYPOINT": "websecurwe",
   "TRAEFIK_NETWORK": "proxy",
-  "TRAEFIK_TLS": "false",
-  "URI_SCHEME": "http",
-  "WP_SITE_URL": "http://reviewnudge-coming-soon-dev.localtest.me"
+  "TRAEFIK_TLS": "true",
+  "URI_SCHEME": "https",
+  "WP_SITE_URL": "https://reviewnudge-coming-soon-dev.localtest.me"
 }

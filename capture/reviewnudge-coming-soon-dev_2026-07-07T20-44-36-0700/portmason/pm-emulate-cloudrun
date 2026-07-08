@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
+export CUR_SCRIPT
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+# shellcheck source=/dev/null
+. "${PORTMASON_SHARE}/pm-helpers"
+
+# ------------------------------
+# Helpers
+# ------------------------------
+
+mask_value() {
+  local s="${1-}"
+  local n="${#s}"
+  if (( n <= 6 )); then
+    printf '******'
+    return 0
+  fi
+  printf '%s******%s' "${s:0:2}" "${s: -2}"
+}
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Missing required command: $cmd"
+}
+
+print_title() {
+  echo
+  echo "================================================================================"
+  echo "$*"
+  echo "================================================================================"
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  ${CUR_SCRIPT} --image-tag <name> --port <port> [--env-file <path>] [--cloudrun-args "<args>"] [--docker-user <uid:gid>]
+
+Defaults:
+  --image-tag     pm-cloudrun-emulator
+  --port          8080
+  --env-file      .env
+  --docker-user   1000:1000
+
+Notes:
+  - This script builds a local image and runs it in a way that resembles Cloud Run:
+    * read-only filesystem
+    * writable /tmp via tmpfs
+    * uses PORT env (default 8080)
+    * injects env vars from an env file
+USAGE
+}
+
+# Build env inject args for docker run
+build_env_inject_args() {
+  local env_file="$1"
+  ENV_INJECT_ARGS=()
+  if [[ -f "$env_file" ]]; then
+    while IFS='=' read -r k v; do
+      [[ -z "${k}" ]] && continue
+      [[ "${k:0:1}" == "#" ]] && continue
+      # allow values containing '=' by re-splitting from original line
+      local line
+      line="$(grep -E "^${k}=" "$env_file" | head -n1 || true)"
+      [[ -z "$line" ]] && continue
+      v="${line#*=}"
+      # trim possible CRLF
+      v="${v%$'\r'}"
+      ENV_INJECT_ARGS+=( -e "${k}=${v}" )
+    done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$env_file" || true)
+  fi
+}
+
+# ------------------------------
+# Main
+# ------------------------------
+
+IMAGE_TAG="pm-cloudrun-emulator"
+PORT="8080"
+ENV_FILE=".env"
+CLOUDRUN_ARGS=""
+DOCKER_USER="1000:1000"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --image-tag)
+      IMAGE_TAG="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --env-file)
+      ENV_FILE="$2"
+      shift 2
+      ;;
+    --cloudrun-args)
+      CLOUDRUN_ARGS="$2"
+      shift 2
+      ;;
+    --docker-user)
+      DOCKER_USER="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+require_cmd docker
+
+print_title "Cloud Run emulation: build + run locally"
+
+echo "Image tag   : ${IMAGE_TAG}"
+echo "Port        : ${PORT}"
+echo "Env file    : ${ENV_FILE}"
+echo "Docker user : ${DOCKER_USER}"
+echo "CloudRun args: ${CLOUDRUN_ARGS:-<none>}"
+
+echo
+echo "==> Env vars (masked) from ${ENV_FILE}:"
+if [[ -f "${ENV_FILE}" ]]; then
+  while IFS='=' read -r k v; do
+    [[ -z "${k}" ]] && continue
+    [[ "${k:0:1}" == "#" ]] && continue
+    local_line="$(grep -E "^${k}=" "${ENV_FILE}" | head -n1 || true)"
+    v="${local_line#*=}"
+    v="${v%$'\r'}"
+    echo "  ${k}=$(mask_value "${v}")"
+  done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}" || true)
+else
+  echo "  (env file not found; continuing without it)"
+fi
+
+build_env_inject_args "$ENV_FILE"
+
+echo
+echo "==> Building image: ${IMAGE_TAG}"
+docker build --no-cache -t "${IMAGE_TAG}" .
+
+echo "==> Container layout (inside image) [/source /tmp]"
+docker run --rm \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+  --user "$DOCKER_USER" \
+  --entrypoint bash \
+  "$IMAGE_TAG" -lc "
+set -euo pipefail
+echo 'PWD:' \$(pwd)
+echo 'ls -la /:'
+ls -la /
+echo
+echo 'ls -la /tmp:'
+ls -la /tmp
+echo
+echo 'ls -la /source:'
+ls -la /source || true
+"
+
+echo
+echo "==> Running container on localhost:${PORT} (Ctrl+C to stop)"
+docker run --rm -it \
+  -p "${PORT}:${PORT}" \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+  --user "$DOCKER_USER" \
+  -e "PORT=${PORT}" \
+  "${ENV_INJECT_ARGS[@]}" \
+  $CLOUDRUN_ARGS \
+  "${IMAGE_TAG}"

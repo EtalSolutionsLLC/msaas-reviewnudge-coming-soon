@@ -60,3 +60,14 @@ test('Portmason targeting math centers short sections and top-aligns tall sectio
   });
   assert.equal(tallTop, 1128);
 });
+
+test('coming-soon landing padding is reduced without replacing Portmason viewport navigation', async () => {
+  const html = await readFile(htmlPath, 'utf8');
+  assert.match(html, /\.shell\s*\{[^}]*padding:\s*11px\s+0\s+64px/);
+  assert.match(html, /\.coming-soon-grid\s*\{[^}]*padding:\s*clamp\(11px,\s*2\.33vw,\s*29px\)\s+clamp\(4px,\s*3vw,\s*34px\)\s+54px/);
+  assert.match(html, /@media\s*\(max-width:\s*640px\)[\s\S]*?\.coming-soon-grid\s*\{[^}]*padding-top:\s*14px/);
+
+  const canonicalHelper = await readFile(new URL('../portmason/web/pm-viewport-navigation.js', import.meta.url), 'utf8');
+  const siteHelper = await readFile(helperPath, 'utf8');
+  assert.equal(siteHelper, canonicalHelper, 'site must continue using the unmodified centralized Portmason helper');
+});
