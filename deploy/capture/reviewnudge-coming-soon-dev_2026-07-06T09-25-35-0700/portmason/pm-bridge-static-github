@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Static GitHub Pages bridge. There is no server-side runtime command to map.
-rt() {
-  die "rt is not available for static-github; GitHub Pages serves static files only." 2
-}
