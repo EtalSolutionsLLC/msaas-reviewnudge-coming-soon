@@ -4,3 +4,4 @@
 .portmason/
 logs/
 *.tar.gz
+capture/
