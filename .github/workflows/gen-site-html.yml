@@ -273,24 +273,24 @@ jobs:
       - name: Generate production site HTML
         working-directory: site
         env:
+          GH_TOKEN: ${{ github.token }}
+          PM_GITHUB_REPOSITORY: ${{ github.repository }}
           PM_DEPLOYMENT_ID: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
-          docker run --rm \
-            --volume "${GITHUB_WORKSPACE}/site/${SITE_ROOT}:/workspace/www" \
-            --volume "${PORTMASON_SHARE}:/workspace/portmason:ro" \
-            --env SITE_DIR=/workspace/www \
-            --env PORTMASON_SHARE=/workspace/portmason \
-            --env GITHUB_ACTIONS=true \
-            --env PM_OFFICIAL_BUILD=true \
-            --env PM_DEFER_SITE_BUILD_FINALIZE=true \
-            --env PM_SOURCE_COMMIT="${PM_SOURCE_COMMIT}" \
-            --env PM_SOURCE_DIRTY=false \
-            --env PM_DEPLOY_ENV="${DEPLOY_ENV}" \
-            --env PM_DEPLOYMENT_ID="${PM_DEPLOYMENT_ID}" \
-            python:3.12-alpine \
-            sh -lc 'exec python3 "$PORTMASON_SHARE/pm-process-site-partials"'
+          (
+            cd "${DEPLOY_ROOT}"
+
+            GITHUB_ACTIONS=true \
+            PM_OFFICIAL_BUILD=true \
+            PM_DEFER_SITE_BUILD_FINALIZE=true \
+            PM_SOURCE_COMMIT="${PM_SOURCE_COMMIT}" \
+            PM_SOURCE_DIRTY=false \
+            PM_DEPLOY_ENV="${DEPLOY_ENV}" \
+            PM_DEPLOYMENT_ID="${PM_DEPLOYMENT_ID}" \
+              pm-setup
+          )
 
           PM_OFFICIAL_BUILD=true \
           PM_SOURCE_COMMIT="${PM_SOURCE_COMMIT}" \
