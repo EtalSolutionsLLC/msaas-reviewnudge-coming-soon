@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm016() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local base=""
+
+    pm_lint_portmason_top_level_basename base "$path" || return 0
+    [[ "$base" == pm-* ]] || return 0
+    pm_lint_is_shell_file "$file" || return 0
+
+    case "$base" in
+        pm-helpers|pm-helpers-*|pm-config-*|pm-provision-*|pm-setup|pm-setup-*|pm-deploy-*|pm-bridge-*|pm-db-bridge-*)
+            return 0
+            ;;
+    esac
+
+    if grep -Eq '__PM_[A-Z0-9_]+_LOADED|return[[:space:]]+0[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+exit[[:space:]]+0' "$file" \
+        && ! grep -Eq '^[[:space:]]*main[[:space:]]*\(\)' "$file"; then
+        pm_lint_report PM016 "$path" 1 \
+            "Sourceable Portmason capability introduces an unclassified module pattern: $base" \
+            "Choose an existing helper, phase, or bridge pattern, or document the new repeatable pattern for EPC/TGF adoption before merge."
+    fi
+}
+
+pm_lint_register_rule PM016 REVIEW file \
+    "Emerging Portmason pattern review" \
+    "TGF Problem-Solving Discipline; TGF Enforcement; EPC A4" \
+    pm_lint_rule_pm016

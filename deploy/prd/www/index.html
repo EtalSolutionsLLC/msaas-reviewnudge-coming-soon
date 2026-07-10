@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#d7dee1" />
-  <meta name="description" content="ReviewNudge is getting ready to help service businesses turn a job well done into an honest review with one thoughtful nudge and an optional follow-up." />
-  <title>ReviewNudge · Coming Soon</title>
+  <meta name="description" content="" data-copy="public.meta.description" data-copy-attr="content" />
+  <title data-copy="public.meta.title"></title>
   <style>
     :root {
       color-scheme: light;
@@ -188,12 +188,19 @@
     .button-compact { min-height: 40px; padding: 10px 14px; }
     .shell { width: min(1240px, calc(100% - 28px)); margin: 0 auto; padding: 11px 0 64px; }
     .coming-soon-grid {
+      position: relative;
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(390px, 0.92fr);
       gap: clamp(30px, 5vw, 74px);
       align-items: center;
       min-height: calc(100vh - 106px);
       padding: clamp(11px, 2.33vw, 29px) clamp(4px, 3vw, 34px) 54px;
+    }
+    .pm-viewport-alias {
+      position: absolute;
+      inset: 0;
+      display: block;
+      pointer-events: none;
     }
     .hero-copy { position: relative; z-index: 1; }
     .eyebrow, .section-kicker, .workflow-step {
@@ -433,12 +440,12 @@
   </style>
   <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
 </head>
-<body>
-  <a class="skip-link" href="#mainContent">Skip to the good stuff</a>
+<body aria-busy="true">
+  <a class="skip-link" href="#top" data-copy="public.accessibility.skip"></a>
   <div class="app-frame">
     <header class="topbar" data-pm-sticky-header="">
-      <a aria-label="ReviewNudge home" class="product-lockup" href="#mainContent">
-        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="ReviewNudge mark">
+      <a class="product-lockup" href="#top" data-copy="public.brand.homeLabel" data-copy-attr="aria-label">
+        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" data-copy="public.brand.markLabel" data-copy-attr="aria-label">
           <defs>
             <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.48" stop-color="#d7e0e6"/><stop offset="1" stop-color="#9aa8b2"/></linearGradient>
             <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1687ff"/><stop offset="1" stop-color="#075fc4"/></linearGradient>
@@ -450,117 +457,109 @@
           <path d="M70 20.5l1.7 3.4 3.8.6-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" fill="#fff8e6"/>
         </svg>
         <span class="product-identity">
-          <strong>ReviewNudge<span aria-hidden="true">™</span></strong>
-          <small>Built on Portmason<span aria-hidden="true">™</span></small>
+          <strong data-copy="public.brand.product"></strong>
+          <small data-copy="public.brand.platform"></small>
         </span>
       </a>
-      <nav aria-label="Primary navigation" class="public-nav">
-        <a href="#preview">Preview</a>
-        <a href="#updates">Updates</a>
-        <a href="#early-access">Early access</a>
+      <nav class="public-nav" data-copy="public.accessibility.primaryNavigation" data-copy-attr="aria-label">
+        <a href="#preview" data-copy="public.nav.preview"></a>
+        <a href="#updates" data-copy="public.nav.updates"></a>
+        <a href="#early-access" data-copy="public.nav.earlyAccess"></a>
       </nav>
       <div class="topbar-actions">
-        <a class="button button-quiet" href="mailto:hello@reviewnudge.local">Contact</a>
-        <a class="button button-primary button-compact" href="#early-access">Join waitlist</a>
+        <a class="button button-quiet" href="mailto:hello@reviewnudge.local" data-copy="public.nav.contact"></a>
+        <a class="button button-primary button-compact" href="#early-access" data-copy="public.nav.join"></a>
       </div>
     </header>
 
-    <main class="shell pm-viewport-target" id="mainContent" data-pm-viewport-target>
-      <section class="coming-soon-grid pm-viewport-target" aria-labelledby="pageTitle" data-pm-viewport-target>
+    <main class="shell" id="mainContent">
+      <section class="coming-soon-grid pm-viewport-target" id="top" aria-labelledby="pageTitle" data-pm-viewport-target>
+        <span class="pm-viewport-alias" id="early-access" aria-hidden="true" data-pm-viewport-target></span>
         <div class="hero-copy">
-          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span>Coming soon for service businesses</p>
-          <h1 id="pageTitle">A thoughtful nudge for more honest reviews.</h1>
-          <p class="lede">ReviewNudge is getting ready to help local service teams ask at the right moment, follow up gently, and keep review requests organized without turning good customer relationships into awkward chores.</p>
+          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span><span data-copy="public.hero.eyebrow"></span></p>
+          <h1 id="pageTitle" data-copy="public.hero.title"></h1>
+          <p class="lede" data-copy="public.hero.body"></p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#early-access">Request early access</a>
-            <a class="button button-secondary" href="#preview">See what’s coming</a>
+            <a class="button button-primary" href="#early-access" data-copy="public.hero.primary"></a>
+            <a class="button button-secondary" href="#preview" data-copy="public.hero.secondary"></a>
           </div>
-          <p class="offer-line"><strong>Founding access is opening soon.</strong><br />One clean workspace for customer nudges, review links, follow-ups, and status visibility.</p>
-          <div aria-label="Made for service businesses" class="service-fit">
-            <span>Home services</span>
-            <span>Local professionals</span>
-            <span>Small teams</span>
+          <p class="offer-line"><strong data-copy="public.hero.offerStrong"></strong><br /><span data-copy="public.hero.offerBody"></span></p>
+          <div class="service-fit" data-copy="public.accessibility.serviceFit" data-copy-attr="aria-label">
+            <span data-copy="public.hero.fit1"></span>
+            <span data-copy="public.hero.fit2"></span>
+            <span data-copy="public.hero.fit3"></span>
           </div>
         </div>
 
-        <section class="launch-card" id="early-access" aria-labelledby="earlyAccessTitle" data-pm-viewport-target>
+        <section class="launch-card" aria-labelledby="earlyAccessTitle">
           <div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
-          <p class="section-kicker">Early access list</p>
-          <h2 id="earlyAccessTitle">Be first in line.</h2>
-          <p>Leave your email and I’ll let you know when ReviewNudge is ready for founding customers.</p>
+          <p class="section-kicker" data-copy="public.earlyAccess.kicker"></p>
+          <h2 id="earlyAccessTitle" data-copy="public.earlyAccess.title"></h2>
+          <p data-copy="public.earlyAccess.body"></p>
           <form class="waitlist-form" data-waitlist-form novalidate>
-            <label for="email">Email address</label>
+            <label for="email" data-copy="public.earlyAccess.emailLabel"></label>
             <div class="field-row">
-              <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required />
-              <button type="submit">Notify me</button>
+              <input id="email" name="email" type="email" placeholder="" autocomplete="email" required data-copy="public.earlyAccess.emailPlaceholder" data-copy-attr="placeholder" />
+              <button type="submit" data-copy="public.earlyAccess.submit"></button>
             </div>
           </form>
           <p class="form-status" data-waitlist-status role="status" aria-live="polite"></p>
-          <p class="offer-line">No spam. No noisy launch sequence. Just a heads-up when the doors open.</p>
-          <footer aria-label="Product assurances" class="launch-meta">
-            <span><i aria-hidden="true" class="assurance-mark">✓</i>No card for early access</span>
-            <span><i aria-hidden="true" class="assurance-mark">✓</i>Built for practical workflows</span>
+          <p class="offer-line" data-copy="public.earlyAccess.privacy"></p>
+          <footer class="launch-meta" data-copy="public.accessibility.productAssurances" data-copy-attr="aria-label">
+            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.earlyAccess.assurance1"></span></span>
+            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.earlyAccess.assurance2"></span></span>
           </footer>
         </section>
       </section>
 
-      <section class="below-grid pm-viewport-target" id="updates" aria-label="What is coming" data-pm-viewport-target>
+      <section class="below-grid pm-viewport-target" id="updates" data-pm-viewport-target data-copy="public.updates.label" data-copy-attr="aria-label">
         <article class="mini-card">
-          <span class="workflow-step">01</span>
-          <strong>Ask while the work is fresh</strong>
-          <p>Send a review request right after a job is complete, while the customer still remembers the good experience.</p>
+          <span class="workflow-step" data-copy="public.updates.step1Number"></span>
+          <strong data-copy="public.updates.step1Title"></strong>
+          <p data-copy="public.updates.step1Body"></p>
         </article>
         <article class="mini-card">
-          <span class="workflow-step">02</span>
-          <strong>Follow up without pestering</strong>
-          <p>Keep reminders gentle, visible, and organized so nobody has to rely on memory or sticky notes.</p>
+          <span class="workflow-step" data-copy="public.updates.step2Number"></span>
+          <strong data-copy="public.updates.step2Title"></strong>
+          <p data-copy="public.updates.step2Body"></p>
         </article>
         <article class="mini-card">
-          <span class="workflow-step">03</span>
-          <strong>Know what happened</strong>
-          <p>Track who is ready, who was nudged, who needs a reminder, and who already left feedback.</p>
+          <span class="workflow-step" data-copy="public.updates.step3Number"></span>
+          <strong data-copy="public.updates.step3Title"></strong>
+          <p data-copy="public.updates.step3Body"></p>
         </article>
       </section>
 
       <section class="preview-frame pm-viewport-target" id="preview" aria-labelledby="previewTitle" data-pm-viewport-target>
-          <div class="preview-copy">
-            <p class="section-kicker">Product preview</p>
-            <h2 id="previewTitle">The workflow stays simple on purpose.</h2>
-            <p>ReviewNudge is designed around the small operational moments that get missed: completed jobs, happy customers, pending asks, and the follow-up that should feel human instead of automated sludge.</p>
-            <div class="hero-actions">
-              <a class="button button-secondary" href="#early-access">Join the waitlist</a>
-            </div>
+        <div class="preview-copy">
+          <p class="section-kicker" data-copy="public.preview.kicker"></p>
+          <h2 id="previewTitle" data-copy="public.preview.title"></h2>
+          <p data-copy="public.preview.body"></p>
+          <div class="hero-actions">
+            <a class="button button-secondary" href="#early-access" data-copy="public.preview.cta"></a>
           </div>
+        </div>
 
-          <div class="preview-window" aria-label="ReviewNudge dashboard preview mockup">
-            <div class="preview-toolbar"><span><i aria-hidden="true"></i>Today’s nudges</span><span class="preview-status">3 ready</span></div>
-            <div class="preview-metrics">
-              <article><small>Requests queued</small><strong>18</strong></article>
-              <article><small>Follow-ups due</small><strong>4</strong></article>
-              <article><small>Reviews captured</small><strong>12</strong></article>
-            </div>
-            <div class="preview-list">
-              <article><span class="avatar">AC</span><div><strong>Acme Plumbing</strong><small>Kitchen repair completed yesterday</small></div><span class="status-pill ready">Ready</span></article>
-              <article><span class="avatar">JM</span><div><strong>Jordan M.</strong><small>First nudge sent this morning</small></div><span class="status-pill sent">Sent</span></article>
-              <article><span class="avatar">SL</span><div><strong>Sunlit HVAC</strong><small>Review link clicked</small></div><span class="status-pill reviewed">Reviewed</span></article>
-            </div>
-            <div class="preview-nudge"><span class="review-spark">★</span><div><strong>Gentle reminder prepared</strong><small>Friendly, short, and tied to the service visit.</small></div></div>
+        <div class="preview-window" data-copy="public.accessibility.previewMockup" data-copy-attr="aria-label">
+          <div class="preview-toolbar"><span><i aria-hidden="true"></i><span data-copy="public.preview.toolbar"></span></span><span class="preview-status" data-copy="public.preview.readyCount"></span></div>
+          <div class="preview-metrics">
+            <article><small data-copy="public.preview.metric1Label"></small><strong data-copy="public.preview.metric1Value"></strong></article>
+            <article><small data-copy="public.preview.metric2Label"></small><strong data-copy="public.preview.metric2Value"></strong></article>
+            <article><small data-copy="public.preview.metric3Label"></small><strong data-copy="public.preview.metric3Value"></strong></article>
           </div>
+          <div class="preview-list">
+            <article><span class="avatar" data-copy="public.preview.sample1Initials"></span><div><strong data-copy="public.preview.sample1Name"></strong><small data-copy="public.preview.sample1Detail"></small></div><span class="status-pill ready" data-copy="public.preview.sample1Status"></span></article>
+            <article><span class="avatar" data-copy="public.preview.sample2Initials"></span><div><strong data-copy="public.preview.sample2Name"></strong><small data-copy="public.preview.sample2Detail"></small></div><span class="status-pill sent" data-copy="public.preview.sample2Status"></span></article>
+            <article><span class="avatar" data-copy="public.preview.sample3Initials"></span><div><strong data-copy="public.preview.sample3Name"></strong><small data-copy="public.preview.sample3Detail"></small></div><span class="status-pill reviewed" data-copy="public.preview.sample3Status"></span></article>
+          </div>
+          <div class="preview-nudge"><span class="review-spark">★</span><div><strong data-copy="public.preview.reminderTitle"></strong><small data-copy="public.preview.reminderBody"></small></div></div>
+        </div>
       </section>
 
-      <footer class="site-footer">
-        ReviewNudge™ is preparing for launch. Add your email to the waitlist or check back here in a day or so.
-      </footer>
+      <footer class="site-footer" data-copy="public.footer.launch"></footer>
     </main>
   </div>
   <script src="./assets/waitlist-config.js"></script>
-  <script src="./assets/waitlist.js"></script>
-  <script type="module">
-    import { bindViewportNavigation } from "./assets/pm-viewport-navigation.js";
-
-    bindViewportNavigation(document, {
-      headerSelector: "[data-pm-sticky-header]"
-    });
-  </script>
+  <script type="module" src="./assets/site.js"></script>
 </body>
 </html>

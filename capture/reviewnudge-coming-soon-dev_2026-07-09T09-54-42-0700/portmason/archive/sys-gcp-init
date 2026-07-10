@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/sys-helpers"
+
+REGION="${REGION:-us-central1}"
+AR_REPO="${AR_REPO:-containers}"
+AR_LOC="${AR_LOC:-us-central1}"
+SERVICE_NAME="${SERVICE_NAME:-${APP_SLUG}-${CM_ENV}}"
+BILLING_ACCOUNT="${BILLING_ACCOUNT:-014C82-F37C5F-9C021C}"
+
+echo "== gcp project init =="
+echo "STACK:       ${STACK}"
+echo "PROJECT_ID:  ${PROJECT_ID}"
+echo "REGION:      ${REGION}"
+echo "AR_REPO:     ${AR_REPO}"
+echo "AR_LOC:      ${AR_LOC}"
+echo "BILLING:     ${BILLING_ACCOUNT}"
+echo
+
+command -v gcloud >/dev/null || { echo "ERROR: gcloud not found"; exit 1; }
+
+# 0) Ensure active account
+ACTIVE="$(gcloud config get-value account 2>/dev/null || true)"
+if [[ -z "$ACTIVE" ]]; then
+  echo "[auth] device flow…"; gcloud auth login --update-adc --no-launch-browser
+  ACTIVE="$(gcloud config get-value account)"; [[ -n "$ACTIVE" ]] || { echo "ERROR: no active account"; exit 1; }
+fi
+echo "[auth] active account: ${ACTIVE}"
+
+# 1) Create or check project + billing
+if ! gcloud projects describe "${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "[project] creating ${PROJECT_ID}"
+  gcloud projects create "${PROJECT_ID}" --name="${STACK}"
+  echo "[billing] linking to ${BILLING_ACCOUNT}"
+  gcloud beta billing projects link "${PROJECT_ID}" --billing-account "${BILLING_ACCOUNT}"
+else
+  state="$(gcloud projects describe "${PROJECT_ID}" --format='value(lifecycleState)')"
+  if [[ "$state" == "DELETE_REQUESTED" ]]; then
+    echo "ERROR: project ${PROJECT_ID} is in DELETE_REQUESTED. Wait for deletion to finish or choose a new ID."
+    exit 3
+  fi
+  if ! gcloud beta billing projects describe "${PROJECT_ID}" --format='value(billingEnabled)' | grep -qi true; then
+    echo "[billing] linking to ${BILLING_ACCOUNT}"
+    gcloud beta billing projects link "${PROJECT_ID}" --billing-account "${BILLING_ACCOUNT}"
+  fi
+fi
+
+# 2) Set ADC quota project EARLY (silences warnings)
+echo "[adc] set ADC quota project → ${PROJECT_ID}"
+gcloud auth application-default set-quota-project "${PROJECT_ID}"
+
+# 3) gcloud defaults
+echo "[config] set project/region/artifacts.location"
+gcloud config set project "${PROJECT_ID}" >/dev/null
+gcloud config set run/region "${REGION}" >/dev/null
+gcloud config set artifacts/location "${AR_LOC}" >/dev/null
+
+# 4) APIs
+echo "[apis] enable run, cloudbuild, artifactregistry"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+
+# 5) Ensure IAM for user (Artifact Registry Admin + Run Admin)
+echo "[iam] ensure roles for user:${ACTIVE}"
+HAS_NEEDED="$(gcloud projects get-iam-policy "${PROJECT_ID}" --format='get(bindings)' | grep -Eiq "(roles/owner|roles/artifactregistry.admin|roles/run.admin).*user:${ACTIVE}" && echo yes || echo no)"
+if [[ "$HAS_NEEDED" != "yes" ]]; then
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="user:${ACTIVE}" --role="roles/artifactregistry.admin" >/dev/null
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="user:${ACTIVE}" --role="roles/run.admin" >/dev/null
+  echo "[iam] granted roles: artifactregistry.admin, run.admin"
+fi
+
+# 6) Ensure AR repo (with short retry for propagation)
+echo "[ar] ensure repo '${AR_REPO}' in ${AR_LOC}"
+for i in {1..3}; do
+  if gcloud artifacts repositories describe "${AR_REPO}" --location "${AR_LOC}" >/dev/null 2>&1; then break; fi
+  if gcloud artifacts repositories create "${AR_REPO}" --repository-format=docker --location="${AR_LOC}" --description="Containers for ${STACK}" >/dev/null 2>&1; then break; fi
+  echo "   attempt $i failed; waiting 10s…"; sleep 10
+done
+gcloud artifacts repositories describe "${AR_REPO}" --location "${AR_LOC}" >/dev/null
+
+echo "[docker] configure auth for ${AR_LOC}-docker.pkg.${CM_ENV}"
+gcloud auth configure-docker "${AR_LOC}-docker.pkg.${CM_ENV}" --quiet
+
+# 7) Cloud Build SA push rights
+echo "[iam] ensure Cloud Build SA writer"
+PN="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+CB_SA="${PN}@cloudbuild.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${CB_SA}" --role="roles/artifactregistry.writer" >/dev/null
+
+# 8) Summary
+ACTIVE_PROJECT="$(gcloud config get-value project)"
+QUOTA_PROJECT="$(grep -o '"quota_project_id":[^,]*' ~/.config/gcloud/application_default_credentials.json 2>/dev/null | awk -F\" '{print $4}')"
+echo
+echo "== summary =="
+echo "Active account : ${ACTIVE}"
+echo "Active project : ${ACTIVE_PROJECT}"
+echo "ADC quota proj : ${QUOTA_PROJECT:-<unset>}"
+echo "AR repo        : ${AR_REPO} @ ${AR_LOC}"
+echo "Region         : ${REGION}"
+echo "OK."

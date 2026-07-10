@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+if ! declare -F pm_load_generated_environment >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    . "${PORTMASON_SHARE}/pm-helpers-db"
+fi
+
+pm_postgres_migration_table() {
+    log DEBUG "ensuring migration ledger"
+    db_rt --command='
+        CREATE TABLE IF NOT EXISTS public.portmason_schema_migrations (
+            version text PRIMARY KEY,
+            checksum_sha256 text NOT NULL,
+            applied_at timestamptz NOT NULL DEFAULT now(),
+            applied_by text NOT NULL DEFAULT current_user
+        );'
+}
+
+pm_postgres_migration_status() {
+    local version="${1:?version required}"
+    db_rt --tuples-only --no-align \
+        --set=version="$version" \
+        --file=- <<'SQL'
+SELECT checksum_sha256
+FROM public.portmason_schema_migrations
+WHERE version = :'version';
+SQL
+}
+
+pm_postgres_record_migration() {
+    local version="${1:?version required}"
+    local checksum="${2:?checksum required}"
+    db_rt \
+        --set=version="$version" \
+        --set=checksum="$checksum" \
+        --file=- <<'SQL'
+INSERT INTO public.portmason_schema_migrations(version, checksum_sha256)
+VALUES (:'version', :'checksum');
+SQL
+}
+
+pm_postgres_apply_migration() {
+    local file="${1:?migration file required}"
+    local version checksum existing transaction_flag
+    version="$(basename "$file")"
+    checksum="$(sha256sum "$file" | awk '{print $1}')"
+    existing="$(pm_postgres_migration_status "$version" | tr -d '[:space:]')"
+
+    if [[ -n "$existing" ]]; then
+        [[ "$existing" == "$checksum" ]] \
+            || die "Migration checksum mismatch: $version (recorded=$existing current=$checksum)" 2
+        log INFO "migration already applied" \
+            "version=$version" "checksum=$checksum"
+        return 0
+    fi
+
+    transaction_flag="--single-transaction"
+    [[ "$version" == *.notx.sql ]] && transaction_flag=""
+
+    log INFO "applying migration" \
+        "version=$version" "checksum=$checksum" \
+        "transaction=$([[ -n "$transaction_flag" ]] && printf yes || printf no)"
+
+    if [[ -n "$transaction_flag" ]]; then
+        db_rt "$transaction_flag" --file=- <"$file"
+    else
+        db_rt --file=- <"$file"
+    fi
+
+    pm_postgres_record_migration "$version" "$checksum"
+
+    log INFO "migration applied" "version=$version"
+}
+
+pm_postgres_apply_migrations() {
+    local migration_dir="${DB_MIGRATIONS_DIR:-${SCRIPT_DIR}/db/migrations}"
+    local file count=0
+
+    if [[ ! -d "$migration_dir" ]]; then
+        log INFO "no migration directory; skipping" \
+            "directory=$migration_dir"
+        return 0
+    fi
+
+    pm_postgres_migration_table
+    while IFS= read -r -d '' file; do
+        pm_postgres_apply_migration "$file"
+        ((count+=1))
+    done < <(find "$migration_dir" -maxdepth 1 -type f -name '*.sql' -print0 | sort -z)
+
+    log INFO "migration phase complete" \
+        "directory=$migration_dir" "files=$count"
+}
+
+pm_postgres_apply_seed_file() {
+    local file="${1:?seed file required}"
+    [[ -r "$file" ]] || return 0
+    log INFO "applying seed" "file=$file"
+    db_rt --single-transaction --file=- <"$file"
+    log INFO "seed applied" "file=$file"
+}
+
+pm_postgres_apply_seeds() {
+    local seed_dir="${DB_SEEDS_DIR:-${SCRIPT_DIR}/db/seeds}"
+    [[ -d "$seed_dir" ]] || return 0
+
+    pm_postgres_apply_seed_file "$seed_dir/common.sql"
+    if [[ -n "${DEPLOY_ENV:-}" ]]; then
+        pm_postgres_apply_seed_file "$seed_dir/${DEPLOY_ENV}.sql"
+    fi
+}
+
+pm_postgres_verify() {
+    local result
+    result="$(db_rt --tuples-only --no-align --command='SELECT current_database() || chr(124) || current_user;')"
+    log INFO "provider verification passed" \
+        "database=${result%%|*}" "user=${result#*|}"
+}
+
+pm_deploy_db_provider() {
+    # pm-setup loads .env.generated before lifecycle execution. The standalone
+    # command follows the same contract when invoked outside pm-setup.
+    pm_load_generated_environment "pm-deploy-postgres"
+
+    [[ "${DB_PROVIDER_CODE:-}" == "postgres" ]] \
+        || die "pm-deploy-postgres requires DB_PROVIDER_CODE=postgres" 2
+
+    log INFO "starting database-code deployment" \
+        "platform=${DB_PLATFORM_CODE:-}" "database=${DB_NAME:-}"
+
+    pm_postgres_apply_migrations
+    pm_postgres_apply_seeds
+    pm_db_call_optional pm_db_project_deploy_hook
+    pm_postgres_verify
+
+    log INFO "database-code deployment complete" \
+        "database=${DB_NAME:-}"
+}
+
+main() {
+    pm_deploy_db_provider "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

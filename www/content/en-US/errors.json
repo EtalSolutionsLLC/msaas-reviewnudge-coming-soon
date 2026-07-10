@@ -1,0 +1,10 @@
+{
+  "waitlist": {
+    "invalidEmail": "Please enter a valid email address.",
+    "unavailable": "The waitlist is almost ready. Please check back shortly.",
+    "verificationEndpointUnreachable": "The waitlist verification endpoint could not be reached.",
+    "verificationTimeout": "The waitlist verification request timed out.",
+    "verificationFailed": "I couldn’t confirm that your email was added to the list. Please try again. Reference: {traceId}",
+    "submissionFailed": "I couldn’t confirm that your email was added to the list. Please try again. Reference: {traceId}"
+  }
+}

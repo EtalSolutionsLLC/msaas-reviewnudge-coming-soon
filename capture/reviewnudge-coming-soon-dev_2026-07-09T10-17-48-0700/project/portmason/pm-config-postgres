@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_postgres() {
+    pm_config_register DB_EXTENSIONS var 'database-admin,db' DB_EXTENSIONS optional
+    pm_config_register POSTGRES_TOOL_IMAGE var 'database-admin' POSTGRES_TOOL_IMAGE optional
+}

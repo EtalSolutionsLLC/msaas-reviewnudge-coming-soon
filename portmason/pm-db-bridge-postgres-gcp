@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Binding between PostgreSQL provider behavior and GCP Cloud SQL hosting.
+
+pm_db_bridge_provision() {
+    [[ "${DB_PROVIDER_CODE:-}" == "postgres" && "${DB_PLATFORM_CODE:-}" == "gcp" ]] \
+        || die "postgres-gcp bridge loaded for the wrong implementation" 2
+
+    : "${CLOUD_SQL_CONNECTION_NAME:?CLOUD_SQL_CONNECTION_NAME required after GCP provisioning}"
+    env_init_set DB_HOST "/cloudsql/${CLOUD_SQL_CONNECTION_NAME}"
+    env_init_set DB_PORT "${DB_PORT:-5432}"
+    env_init_set DATABASE_SSL_MODE "disable"
+
+    local runtime_url
+    pm_db_postgres_build_url runtime_url "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" "disable"
+    env_init_set DATABASE_URL "$runtime_url"
+    env_init_set DATABASE_DIRECT_URL "$runtime_url"
+    pm_db_publish_generated_contract
+
+    log INFO "pm-db-bridge-postgres-gcp: provider/platform binding ready" \
+        "connection=$CLOUD_SQL_CONNECTION_NAME" \
+        "runtime_host=$DB_HOST" "database=$DB_NAME"
+}
+
+pm_db_bridge_deploy() {
+    log INFO "pm-db-bridge-postgres-gcp: verifying Cloud SQL execution path" \
+        "connection=${CLOUD_SQL_CONNECTION_NAME:-<unset>}"
+    db_rt --command 'SELECT 1' >/dev/null
+    log INFO "pm-db-bridge-postgres-gcp: Cloud SQL execution path verified"
+}
+
+pm_gcp_proxy_credentials_file() {
+    local out_var="${1:?output variable required}"
+    local candidate="${GOOGLE_APPLICATION_CREDENTIALS:-${HOME}/.config/gcloud/application_default_credentials.json}"
+    [[ -r "$candidate" ]] || die "Cloud SQL proxy credentials file is not readable: $candidate" 2
+    printf -v "$out_var" '%s' "$candidate"
+}
+
+db_rt() {
+    local user="${PM_DB_RT_USER:-${DB_USER:?DB_USER required}}"
+    local password="${PM_DB_RT_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD required}}"
+    local database="${PM_DB_RT_DATABASE:-${DB_NAME:?DB_NAME required}}"
+    local connection="${CLOUD_SQL_CONNECTION_NAME:?CLOUD_SQL_CONNECTION_NAME required}"
+    local credentials network proxy_name credentials_file rc=0
+    local proxy_image="${CLOUD_SQL_PROXY_IMAGE:-gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.15.2}"
+    local psql_image="${POSTGRES_TOOL_IMAGE:-postgres:17-alpine}"
+
+    have docker || die "db_rt: docker is required for containerized Cloud SQL access" 2
+    pm_gcp_proxy_credentials_file credentials_file
+
+    network="pm-db-${STACK:-stack}-${BASHPID}"
+    network="${network//[^a-zA-Z0-9_.-]/-}"
+    proxy_name="${network}-proxy"
+
+    log INFO "pm-db-bridge-postgres-gcp: starting ephemeral Cloud SQL proxy" \
+        "connection=$connection" "network=$network"
+    docker network create "$network" >/dev/null
+
+    cleanup_pm_db_proxy() {
+        docker rm -f "$proxy_name" >/dev/null 2>&1 || true
+        docker network rm "$network" >/dev/null 2>&1 || true
+    }
+
+    docker run -d --rm \
+        --name "$proxy_name" \
+        --network "$network" \
+        --network-alias cloudsql \
+        -v "${credentials_file}:/secrets/adc.json:ro" \
+        "$proxy_image" \
+        --credentials-file=/secrets/adc.json \
+        --address=0.0.0.0 \
+        --port=5432 \
+        "$connection" >/dev/null
+
+    local attempt
+    for attempt in $(seq 1 "${DB_PROXY_STARTUP_ATTEMPTS:-30}"); do
+        if PGPASSWORD="$password" docker run --rm --network "$network" \
+            --env PGPASSWORD \
+            "$psql_image" \
+            pg_isready --host cloudsql --port 5432 --username "$user" --dbname "$database" \
+            >/dev/null 2>&1; then
+            break
+        fi
+        if (( attempt == ${DB_PROXY_STARTUP_ATTEMPTS:-30} )); then
+            docker logs "$proxy_name" 2>&1 | tail -n 50 >&2 || true
+            cleanup_pm_db_proxy
+            die "Cloud SQL proxy did not become ready after $attempt attempts" 2
+        fi
+        sleep "${DB_PROXY_STARTUP_DELAY_SECONDS:-1}"
+    done
+
+    log DEBUG "pm-db-bridge-postgres-gcp: executing containerized psql" \
+        "user=$user" "database=$database"
+    PGPASSWORD="$password" PM_DB_SQL_SECRET="${PM_DB_SQL_SECRET:-}" \
+        docker run --rm --network "$network" \
+        --env PGPASSWORD --env PM_DB_SQL_SECRET \
+        "$psql_image" \
+        psql --set=ON_ERROR_STOP=1 --no-psqlrc \
+        --host cloudsql --port 5432 \
+        --username "$user" --dbname "$database" "$@" || rc=$?
+
+    cleanup_pm_db_proxy
+    return "$rc"
+}

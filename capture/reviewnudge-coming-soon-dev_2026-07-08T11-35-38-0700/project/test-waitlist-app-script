@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_SCRIPT_URL='https://script.google.com/macros/s/AKfycbwFWlO31J_Oh5aRoBa9QVNbhCGbOq-pxgqKiZavkY-A61dFHoNA1v4KPNTaUcIDtacy/exec'
+KNOWN_TRACE_ID='b268ed8e-15aa-4b98-af35-6157a1ca37bd'
+TEST_EMAIL="${1:-}"
+
+for command in curl jq; do
+  command -v "$command" >/dev/null 2>&1 || {
+    printf 'ERROR: Required command not found: %s\n' "$command" >&2
+    exit 1
+  }
+done
+
+if [[ -z "$TEST_EMAIL" ]]; then
+  printf 'Usage: %s test-email@example.com\n' "$0" >&2
+  exit 1
+fi
+
+printf '\n=== 1. Service availability ===\n'
+curl --fail-with-body \
+  --silent \
+  --show-error \
+  --location \
+  "$APP_SCRIPT_URL" |
+  jq .
+
+printf '\n=== 2. Existing trace status ===\n'
+curl --fail-with-body \
+  --silent \
+  --show-error \
+  --location \
+  --get \
+  --data-urlencode 'action=status' \
+  --data-urlencode "traceId=$KNOWN_TRACE_ID" \
+  "$APP_SCRIPT_URL" |
+  jq .
+
+TRACE_ID="manual-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+
+PAYLOAD="$(
+  jq -nc \
+    --arg email "$TEST_EMAIL" \
+    --arg traceId "$TRACE_ID" \
+    --arg submittedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      email: $email,
+      traceId: $traceId,
+      source: "manual-app-script-test",
+      page: "independent-shell-test",
+      referrer: "",
+      userAgent: "curl",
+      submittedAt: $submittedAt
+    }'
+)"
+
+printf '\n=== 3. Submit independent signup ===\n'
+printf 'Trace ID: %s\n' "$TRACE_ID"
+
+curl --fail-with-body \
+  --silent \
+  --show-error \
+  --location \
+  --request POST \
+  --header 'Content-Type: text/plain;charset=utf-8' \
+  --data-binary "$PAYLOAD" \
+  "$APP_SCRIPT_URL" |
+  jq .
+
+printf '\n=== 4. Confirm submitted trace ===\n'
+sleep 2
+
+curl --fail-with-body \
+  --silent \
+  --show-error \
+  --location \
+  --get \
+  --data-urlencode 'action=status' \
+  --data-urlencode "traceId=$TRACE_ID" \
+  "$APP_SCRIPT_URL" |
+  jq .
+
+printf '\nTest complete. Search the spreadsheet and WaitlistAudit sheet for:\n%s\n' "$TRACE_ID"

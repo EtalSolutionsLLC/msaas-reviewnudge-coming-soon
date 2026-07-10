@@ -1,9 +1,12 @@
-name: ${STACK:?STACK is required}
+name: ${STACK}
 
 services:
   web:
     image: nginx:1.27-alpine
     restart: unless-stopped
+
+    env_file:
+      - "./.env.generated"
 
     volumes:
       - "./www:/usr/share/nginx/html:ro"
@@ -17,7 +20,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
 
-      - "traefik.http.routers.${STACK}-http.rule=Host(`${APP_HOST:?APP_HOST is required}`)"
+      - "traefik.http.routers.${STACK}-http.rule=Host(`${APP_HOST}`) || Host(`${PM_EDGE_TUNNEL_HOSTNAME}`)"
       - "traefik.http.routers.${STACK}-http.entrypoints=web"
       - "traefik.http.routers.${STACK}-http.priority=10"
       - "traefik.http.routers.${STACK}-http.middlewares=${STACK}-https-redirect"
@@ -26,7 +29,7 @@ services:
       - "traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.permanent=false"
 
-      - "traefik.http.routers.${STACK}-https.rule=Host(`${APP_HOST:?APP_HOST is required}`)"
+      - "traefik.http.routers.${STACK}-https.rule=Host(`${APP_HOST}`) || Host(`${PM_EDGE_TUNNEL_HOSTNAME}`)"
       - "traefik.http.routers.${STACK}-https.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.${STACK}-https.priority=10"
       - "traefik.http.routers.${STACK}-https.tls=true"

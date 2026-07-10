@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+# Purpose: Patch pm-deploy-static so it renders live site HTML only and fails fast.
+# Usage:   pm-migrate-static-render-scope [PORTMASON_SOURCE_DIR]
+#
+# Contract:
+# - Operates on the tracked Portmason source tree, not the /usr/local symlink layer.
+# - Excludes generated/non-live trees from static HTML discovery.
+# - Honors PM_STATIC_EXCLUDE_DIRS for additional exclusions.
+# - Corrects inverted-status handling so rendering failures propagate.
+# - Safe to run more than once.
+# - Validates Bash syntax after migration.
+
+source_dir="${1:-${HOME}/code/ops-and-sops/ops/portmason}"
+target="${source_dir}/pm-deploy-static"
+
+[[ -f "${target}" ]] || {
+  printf 'ERROR: target not found: %s\n' "${target}" >&2
+  exit 2
+}
+
+python3 - "${target}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+original = text
+
+old_find = '''pm_find_html_pages() {
+    local site_dir="$1"
+
+    find "${site_dir}" \\
+        -type f \\
+        -name '*.html' \\
+        -not -path "${site_dir}/partials/*" \\
+        -not -path '*/partials/*' \\
+        -print
+}
+'''
+
+new_find = '''pm_find_html_pages() {
+    local site_dir="$1"
+    local configured_excludes="${PM_STATIC_EXCLUDE_DIRS:-}"
+    local exclude_dir=""
+    local -a find_args=(
+        "${site_dir}"
+        -type f
+        -name '*.html'
+        -not -path '*/partials/*'
+        -not -path '*/.git/*'
+        -not -path '*/capture/*'
+        -not -path '*/archive/*'
+        -not -path '*/portmason/*'
+        -not -path '*/tests/*'
+        -not -path '*/deploy/*'
+    )
+
+    # Optional directory names may be added as a comma- or
+    # whitespace-delimited list, for example:
+    #   PM_STATIC_EXCLUDE_DIRS="capture,generated"
+    configured_excludes="${configured_excludes//,/ }"
+    for exclude_dir in ${configured_excludes}; do
+        [[ -n "${exclude_dir}" ]] || continue
+
+        case "${exclude_dir}" in
+            /*|*'..'*|*'\\\\'*)
+                die "Unsafe PM_STATIC_EXCLUDE_DIRS entry: ${exclude_dir}" 2
+                ;;
+        esac
+
+        find_args+=( -not -path "*/${exclude_dir}/*" )
+    done
+
+    find "${find_args[@]}" -print
+}
+'''
+
+if old_find in text:
+    text = text.replace(old_find, new_find, 1)
+elif new_find not in text:
+    print(f"ERROR: expected pm_find_html_pages block not found: {path}", file=sys.stderr)
+    raise SystemExit(3)
+
+replacements = [
+    (
+'''    if ! awk \
+''',
+'''    if awk \
+'''
+    ),
+    (
+'''        if ! verify_partial_markers_balanced "$page" "$partial_name"; then
+            rc=$?
+            break
+        fi
+''',
+'''        if verify_partial_markers_balanced "$page" "$partial_name"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+'''
+    ),
+    (
+'''        if ! render_partial "$page" "$partial_name" "$partial_file"; then
+            rc=$?
+            break
+        fi
+''',
+'''        if render_partial "$page" "$partial_name" "$partial_file"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+'''
+    ),
+    (
+'''    if ! verify_page_partial_markers_balanced "$page"; then
+        rc=$?
+        pm_restore_page_backup "$page" "$backup_file"
+        pm_discard_page_backup "$backup_file"
+        return "$rc"
+    fi
+''',
+'''    if verify_page_partial_markers_balanced "$page"; then
+        :
+    else
+        rc=$?
+        pm_restore_page_backup "$page" "$backup_file"
+        pm_discard_page_backup "$backup_file"
+        return "$rc"
+    fi
+'''
+    ),
+    (
+'''        ' "$page" > "$tmp_file"; then
+
+        local rc=$?
+        rm -f "$tmp_file"
+''',
+'''        ' "$page" > "$tmp_file"; then
+        :
+    else
+        local rc=$?
+        rm -f "$tmp_file"
+'''
+    ),
+    (
+'''    if ! mv "$tmp_file" "$page"; then
+        local rc=$?
+        rm -f "$tmp_file"
+        log ERROR "Failed to replace rendered page: ${page}; rc=${rc}"
+        return "$rc"
+    fi
+''',
+'''    if mv "$tmp_file" "$page"; then
+        :
+    else
+        local rc=$?
+        rm -f "$tmp_file"
+        log ERROR "Failed to replace rendered page: ${page}; rc=${rc}"
+        return "$rc"
+    fi
+'''
+    ),
+    (
+'''        if ! verify_page_partial_markers_balanced "$page"; then
+            rc=$?
+            break
+        fi
+''',
+'''        if verify_page_partial_markers_balanced "$page"; then
+            :
+        else
+            rc=$?
+            break
+        fi
+'''
+    ),
+]
+
+for old, new in replacements:
+    if old in text:
+        text = text.replace(old, new)
+    elif new not in text:
+        print(f"ERROR: expected status-handling block not found in {path}", file=sys.stderr)
+        raise SystemExit(4)
+
+if text == original:
+    print(f"UNCHANGED: already migrated: {path}")
+else:
+    path.write_text(text, encoding="utf-8")
+    print(f"UPDATED: {path}")
+PY
+
+bash -n "${target}"
+printf 'OK: Bash syntax valid: %s\n' "${target}"

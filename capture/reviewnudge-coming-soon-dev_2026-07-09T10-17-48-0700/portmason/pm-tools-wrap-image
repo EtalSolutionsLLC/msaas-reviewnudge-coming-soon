@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+
+# shellcheck source=/dev/null
+. "${PORTMASON_SHARE}/pm-helpers"
+
+# -----------------------------------------------------------------------------
+# NOTE (2026-02-10):
+# This script intentionally avoids Docker Buildx/BuildKit imagetools so it does
+# not create or depend on a buildx builder container. Tradeoffs:
+# - Only a SINGLE platform image is built/pushed (your current Docker platform).
+# - Multi-arch manifest mirroring + OCI index annotations are skipped.
+# -----------------------------------------------------------------------------
+
+# --- Preflight checks ---------------------------------------------------------
+
+preflight_checks() {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "[${script_name}] FATAL: 'jq' is required but not found on PATH." >&2
+        echo "[${script_name}] Install jq (e.g., sudo apt-get install jq) and retry." >&2
+        return 1
+    fi
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "[${script_name}] FATAL: 'docker' is required but not found on PATH." >&2
+        return 1
+    fi
+
+    if [[ -z "${IMAGE_DESCRIPTION:-}" ]]; then
+        echo "[${script_name}] FATAL: IMAGE_DESCRIPTION is required for labeling." >&2
+        echo "[${script_name}] Set IMAGE_DESCRIPTION in your .env before running pm-tools-wrap-image." >&2
+        return 1
+    fi
+}
+
+# --- Platform detection (single-platform only) --------------------------------
+# Usage: detect_current_platform OUT_VAR
+detect_current_platform() {
+  local __outvar="$1"
+  local os arch
+  os="$(docker info --format '{{.OSType}}' 2>/dev/null || echo linux)"
+  arch="$(docker info --format '{{.Architecture}}' 2>/dev/null || echo amd64)"
+
+  # Docker reports "aarch64" sometimes; normalize to "arm64"
+  case "${arch}" in
+    aarch64) arch="arm64" ;;
+  esac
+
+  printf -v "$__outvar" '%s/%s' "${os}" "${arch}"
+}
+
+# --- Digest helpers -----------------------------------------------------------
+
+# Usage: get_local_digest OUT_VAR IMAGE_TAG
+# Attempts to resolve a digest from the local image metadata (platform-specific).
+get_local_digest() {
+  local __outvar="$1"
+  local image="$2"
+  local ref=""
+
+  ref="$(docker inspect "${image}" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+  if [[ -z "${ref}" ]]; then
+    printf -v "$__outvar" ''
+    return 0
+  fi
+
+  printf -v "$__outvar" '%s' "${ref#*@}"
+}
+
+# Usage: push_and_capture_digest OUT_VAR IMAGE_TAG
+# Pushes an image tag and extracts the sha256 digest from the push output.
+push_and_capture_digest() {
+  local __outvar="$1"
+  local tag="$2"
+  local out digest
+
+  out="$(docker push "${tag}" 2>&1)"
+  echo "${out}" >&2
+
+  digest="$(printf '%s\n' "${out}" | awk '/digest: sha256:/ {print $2; exit}')"
+  if [[ -z "${digest}" ]]; then
+    digest="$(printf '%s\n' "${out}" | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n1)"
+  fi
+
+  if [[ -z "${digest}" ]]; then
+    echo "[${script_name}] FATAL: Could not capture digest from 'docker push' output for ${tag}" >&2
+    return 1
+  fi
+
+  printf -v "$__outvar" '%s' "${digest}"
+}
+
+# --- Signing helpers (uses get_secret from pm-helpers) ------------------------
+
+sign_with_retry() {
+  local image_digest="$1"
+  local pem="$2"
+  local max_attempts="${3:-3}"
+
+  local attempt=1
+  while (( attempt <= max_attempts )); do
+    local pass="${signing_pass:-}"
+    [[ -z "${signing_pass}" ]] && {
+        read -s -p "Enter cosign key password (attempt ${attempt}/${max_attempts}): " pass
+        echo
+    }
+
+    echo "[${script_name}] Verifying if image is already signed: ${image_digest}" >&2
+    if env -i PATH="$PATH" COSIGN_PASSWORD="${pass}" cosign verify --key <(printf '%s\n' "$pem") "${image_digest}" >/dev/null 2>&1; then
+        signing_pass="$pass"
+        echo "[${script_name}] Image already signed with this key: ${image_digest}" >&2
+        printf -v pass '%*s' "${#pass}" ''
+        unset pass
+        return 0
+    fi
+
+    echo "[${script_name}] Signing image ${image_digest}" >&2
+    if env -i PATH="$PATH" COSIGN_PASSWORD="$pass" cosign sign --key <(printf '%s\n' "$pem") "$image_digest" >/dev/null 2>&1; then
+        signing_pass="$pass"
+        echo "[${script_name}] Signing succeeded."
+        printf -v pass '%*s' "${#pass}" ''
+        unset pass
+        return 0
+    else
+        local rc=$?
+    fi
+
+    echo "[${script_name}] Signing failed (rc=${rc})."
+    (( attempt++ ))
+  done
+
+  echo "[${script_name}] Giving up after ${max_attempts} attempts."
+  return 1
+}
+
+sign_image() {
+    local image_digest="$1"
+
+    if [[ -z "${COSIGN_SECRET_PATH:-}" ]]; then
+        echo "[${script_name}] COSIGN_SECRET_PATH not set; skipping signing (this is okay for now)." >&2
+        return 0
+    fi
+
+    if ! command -v cosign >/dev/null 2>&1; then
+        echo "[${script_name}] COSIGN_SECRET_PATH set but 'cosign' not found; skipping signing." >&2
+        return 0
+    fi
+
+    cosign_key="$(get_secret "${COSIGN_SECRET_PATH}")" || {
+        echo "[${script_name}] Failed to retrieve signing key from ${COSIGN_SECRET_PATH}" >&2
+        exit 1
+    }
+
+    sign_with_retry "$image_digest" "$cosign_key" 3
+}
+
+ensure_oci_defaults() {
+  local publish_tag="${1:-${PUBLISH_TAG:-}}"
+
+  local repo_name
+  repo_name="${WRAPPED_REPO##*/}"
+
+  : "${IMAGE_TITLE:=Et al WordPress Core (${repo_name})}"
+  : "${IMAGE_VENDOR:=Et al Solutions LLC}"
+
+  : "${IMAGE_SOURCE_BASE:=https://github.com/solutions-etal}"
+  : "${IMAGE_URL_BASE:=${IMAGE_SOURCE_BASE}}"
+
+  : "${IMAGE_SOURCE:=${IMAGE_SOURCE_BASE}/${repo_name}}"
+  : "${IMAGE_URL:=${IMAGE_URL_BASE}/${repo_name}}"
+  : "${IMAGE_DOCUMENTATION:=${IMAGE_SOURCE}#readme}"
+
+  if [[ -z "${IMAGE_REVISION:-}" ]] && command -v git >/dev/null 2>&1; then
+    IMAGE_REVISION="$(git rev-parse HEAD 2>/dev/null || true)"
+    export IMAGE_REVISION
+  fi
+
+  if [[ -z "${IMAGE_VERSION:-}" ]] && [[ -n "${publish_tag}" ]]; then
+    local tag_part build_id
+    tag_part="${publish_tag##*:}"
+    build_id="${tag_part##*-}"
+    if [[ "${build_id}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+      IMAGE_VERSION="${build_id}"
+      export IMAGE_VERSION
+    fi
+  fi
+}
+
+# --- Main script logic --------------------------------------------------------
+
+main() {
+  preflight_checks
+
+  VENDOR_IMAGE_TAG="${1:-${VENDOR_IMAGE_TAG:-}}"
+  WRAPPED_REPO="${2:-${WRAPPED_REPO:-}}"
+
+  if [[ -z "${VENDOR_IMAGE_TAG}" ]]; then
+    echo "[${script_name}] ERROR: VENDOR_IMAGE_TAG must be provided (arg1 or env VENDOR_IMAGE_TAG)." >&2
+    return 1
+  fi
+
+  if [[ -z "${WRAPPED_REPO}" ]]; then
+    echo "[${script_name}] ERROR: WRAPPED_REPO must be provided (arg2 or env WRAPPED_REPO)." >&2
+    return 1
+  fi
+
+  WRAP_DOCKERFILE="${WRAP_DOCKERFILE:-Dockerfile}"
+  SITE_DIR="${SITE_DIR:-.}"
+
+  if [[ ! -f "${WRAP_DOCKERFILE}" ]]; then
+    echo "[${script_name}] ERROR: WRAP_DOCKERFILE not found at ${WRAP_DOCKERFILE}" >&2
+    return 1
+  fi
+
+  IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-unknown}"
+
+  WRAP_DOCKERFILE_FULLPATH="$(realpath "${WRAP_DOCKERFILE}")"
+  SITE_DIR="$(realpath "${SITE_DIR}")"
+  DATE_TAG="${DATE_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}"
+
+  local vendor_tag
+  vendor_tag="${VENDOR_IMAGE_TAG#*:}"
+  if [[ "${vendor_tag}" == "${VENDOR_IMAGE_TAG}" ]]; then
+    vendor_tag="latest"
+  fi
+
+  FLAVOR_TAG="${FLAVOR_TAG:-${vendor_tag}}"
+
+  WRAPPED_TAG_VERSIONED="${WRAPPED_REPO}:${FLAVOR_TAG}-${DATE_TAG}"
+  WRAPPED_TAG_STABLE="${WRAPPED_REPO}:${FLAVOR_TAG}"
+
+  local platform=""
+  detect_current_platform platform
+
+  echo "[${script_name}] Vendor image        : ${VENDOR_IMAGE_TAG}" >&2
+  echo "[${script_name}] Wrapped repo        : ${WRAPPED_REPO}" >&2
+  echo "[${script_name}] Image description   : ${IMAGE_DESCRIPTION}" >&2
+  echo "[${script_name}] Flavor tag          : ${FLAVOR_TAG}" >&2
+  echo "[${script_name}] Date tag            : ${DATE_TAG}" >&2
+  echo "[${script_name}] Versioned tag       : ${WRAPPED_TAG_VERSIONED}" >&2
+  echo "[${script_name}] Stable tag          : ${WRAPPED_TAG_STABLE}" >&2
+  echo "[${script_name}] Wrap Dockerfile     : ${WRAP_DOCKERFILE_FULLPATH}" >&2
+  echo "[${script_name}] Build context (root): ${SITE_DIR}" >&2
+  echo "[${script_name}] Build platform      : ${platform} (single-platform; buildx disabled)" >&2
+
+  echo "[${script_name}] Pulling vendor image (best-effort)..." >&2
+  docker pull "${VENDOR_IMAGE_TAG}" || true
+
+  local vendor_digest=""
+  get_local_digest vendor_digest "${VENDOR_IMAGE_TAG}" || true
+  if [[ -n "${vendor_digest}" ]]; then
+    echo "[${script_name}] Vendor digest (platform-specific): ${VENDOR_IMAGE_TAG}@${vendor_digest}" >&2
+  else
+    echo "[${script_name}] WARN: Could not determine vendor digest locally; proceeding without a pinned digest." >&2
+  fi
+
+  echo "[${script_name}] Building wrapped image (single-platform)..." >&2
+  docker build \
+    --build-arg "VENDOR_IMAGE_TAG=${VENDOR_IMAGE_TAG}" \
+    --build-arg "VENDOR_DIGEST=${vendor_digest}" \
+    --build-arg "IMAGE_DESCRIPTION=${IMAGE_DESCRIPTION}" \
+    -f "${WRAP_DOCKERFILE_FULLPATH}" \
+    -t "${WRAPPED_TAG_VERSIONED}" \
+    -t "${WRAPPED_TAG_STABLE}" \
+    "${SITE_DIR}"
+
+  local wrapped_digest
+  echo "[${script_name}] Pushing versioned tag (capturing digest)..." >&2
+  push_and_capture_digest wrapped_digest "${WRAPPED_TAG_VERSIONED}"
+
+  echo "[${script_name}] Pushing stable tag..." >&2
+  docker push "${WRAPPED_TAG_STABLE}" >/dev/null
+
+  ensure_oci_defaults "${WRAPPED_TAG_VERSIONED}"
+
+  local wrapped_repo_digest
+  wrapped_repo_digest="${WRAPPED_REPO}@${wrapped_digest}"
+  echo "[${script_name}] Wrapped image digest: ${wrapped_repo_digest}" >&2
+
+  signing_pass=
+  sign_image "${wrapped_repo_digest}"
+  unset signing_pass
+
+  echo "[${script_name}] Done." >&2
+}
+
+main "$@"

@@ -1,0 +1,3 @@
+invalid interpolation format for services.web.labels.[].
+You may need to escape any $ with another $.
+solutions.etal.stack=${STACK]]

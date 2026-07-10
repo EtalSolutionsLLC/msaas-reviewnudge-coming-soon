@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+pm_setup_arg MIGRATION_NAME "-n|--name" needs_value required export
+pm_commit_args "$@"
+
+COMPOSE_BAKE=0 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml run --rm -T \
+  -e MIGRATION_NAME \
+  api-tools '
+set -euo pipefail
+: "${MIGRATION_NAME:?Missing MIGRATION_NAME}"
+cd /work/api
+dotnet tool restore
+dotnet tool run dotnet-ef migrations add "${MIGRATION_NAME}"
+dotnet tool run dotnet-ef database update
+'

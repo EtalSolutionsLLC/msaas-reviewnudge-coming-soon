@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "1.0",
+  "updatedAt": "2026-07-08",
+  "capabilities": [
+    {
+      "id": "pm-capabilities",
+      "name": "Portmason Capability Catalog",
+      "kind": "command",
+      "entity": "portmason",
+      "phase": "discovery",
+      "path": "ops/portmason/pm-capabilities",
+      "summary": "Lists and searches reusable Portmason capabilities before project-local behavior is authored.",
+      "inputs": ["search term", "capability id"],
+      "outputs": ["capability metadata"],
+      "patterns": ["PM-PAT-001"]
+    },
+    {
+      "id": "pm-patterns",
+      "name": "Portmason Pattern Registry",
+      "kind": "command",
+      "entity": "governance",
+      "phase": "discovery",
+      "path": "ops/portmason/pm-patterns",
+      "summary": "Lists, searches, and validates canonical and candidate Portmason patterns.",
+      "inputs": ["pattern id", "search term"],
+      "outputs": ["pattern metadata"],
+      "patterns": ["PM-PAT-001", "PM-PAT-015"]
+    },
+    {
+      "id": "pm-config-manager",
+      "name": "PM Configuration Manager",
+      "kind": "orchestrator",
+      "entity": "configuration",
+      "phase": "config",
+      "path": "ops/portmason/pm-config-manager",
+      "summary": "Registers, validates, scopes, derives, and delivers variables, secrets, and control-plane credentials.",
+      "inputs": ["PM_* source configuration", "service config scopes", "runtime and database selectors"],
+      "outputs": ["scoped local env files", "platform variables", "platform secret references"],
+      "patterns": ["PM-PAT-002", "PM-PAT-004", "PM-PAT-005", "PM-PAT-014"]
+    },
+    {
+      "id": "pm-lint",
+      "name": "PM Linting Suite",
+      "kind": "command",
+      "entity": "quality",
+      "phase": "validation",
+      "path": "ops/portmason/pm-lint",
+      "summary": "Mechanically enforces known TGF/EPC patterns and flags emerging patterns for deliberate review.",
+      "inputs": ["repository files", "rule modules", "dated exceptions"],
+      "outputs": ["errors", "warnings", "guidance", "review findings"],
+      "patterns": ["PM-PAT-001", "PM-PAT-003", "PM-PAT-010", "PM-PAT-016"]
+    },
+    {
+      "id": "pm-preservation-manifest",
+      "name": "Project Migration Preservation Manifest",
+      "kind": "command",
+      "entity": "change-management",
+      "phase": "migration",
+      "path": "ops/portmason/pm-preservation-manifest",
+      "summary": "Creates, validates, and summarizes migration preservation manifests.",
+      "inputs": ["preservation.json"],
+      "outputs": ["validated preservation evidence", "human-readable summary"],
+      "patterns": ["PM-PAT-006"]
+    },
+    {
+      "id": "pm-setup",
+      "name": "Portmason Setup Orchestrator",
+      "kind": "orchestrator",
+      "entity": "lifecycle",
+      "phase": "setup",
+      "path": "ops/portmason/pm-setup",
+      "summary": "Coordinates configuration generation, preflight, provisioning, configuration delivery, setup, and deployment without absorbing entity-owned behavior.",
+      "inputs": ["RUNTIME_ADAPTER_CODE", "DB_PROVIDER_PLATFORM_CODE", "operator environment"],
+      "outputs": ["configured running environment"],
+      "patterns": ["PM-PAT-003", "PM-PAT-005", "PM-PAT-014"]
+    },
+    {
+      "id": "pm-viewport-navigation",
+      "name": "Portmason Viewport Navigation",
+      "kind": "browser-utility",
+      "entity": "web-navigation",
+      "phase": "runtime",
+      "path": "ops/portmason/web/pm-viewport-navigation.js",
+      "summary": "Canonical hash and viewport alignment behavior for Portmason-based public sites.",
+      "inputs": ["hash targets", "stable header dimensions", "target aliases"],
+      "outputs": ["consistent direct and clicked navigation alignment"],
+      "patterns": ["PM-PAT-008", "PM-PAT-011"]
+    },
+    {
+      "id": "pm-extract-files-from-tar",
+      "name": "Selective Build Extraction",
+      "kind": "command",
+      "entity": "artifacts",
+      "phase": "apply",
+      "path": "ops/portmason/pm-extract-files-from-tar",
+      "summary": "Applies only the files listed in an embedded project/chg.txt from a verified build archive.",
+      "inputs": ["build archive", "embedded project/chg.txt"],
+      "outputs": ["selected repo-root file updates"],
+      "patterns": ["PM-PAT-006", "PM-PAT-015"]
+    },
+    {
+      "id": "pm-launch-reviewnudge",
+      "name": "ReviewNudge Launch Conductor",
+      "kind": "command",
+      "entity": "reviewnudge",
+      "phase": "launch",
+      "path": "ops/portmason/pm-launch-reviewnudge",
+      "summary": "Runs the repeatable dependency-ordered Traefik, Coming Soon, and ReviewNudge launch workflow.",
+      "inputs": ["three project repositories", "Portmason runtime"],
+      "outputs": ["validated running ReviewNudge environment"],
+      "patterns": ["PM-PAT-015", "PM-PAT-016"]
+    }
+  ]
+}

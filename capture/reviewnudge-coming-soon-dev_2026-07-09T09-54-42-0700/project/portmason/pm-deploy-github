@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+if ! declare -F pm_github_write_browser_config >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    . "${PORTMASON_SHARE}/pm-helpers-github"
+fi
+
+pm_deploy_runtime_platform() {
+    github_pages_prepare
+}
+
+main() {
+    pm_deploy_runtime_platform "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

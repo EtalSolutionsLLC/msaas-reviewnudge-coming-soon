@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm027() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+
+    case "$path" in
+        preservation.json|*/preservation.json) ;;
+        *) return 0 ;;
+    esac
+
+    if ! command -v jq >/dev/null 2>&1; then
+        pm_lint_report PM027 "$path" 1 \
+            "Preservation manifest cannot be validated because jq is unavailable" \
+            "Install jq in the lint runtime; PM migration evidence is a required machine-readable contract."
+        return 0
+    fi
+
+    if ! jq -e '
+      .schemaVersion == "1.0"
+      and (.migrationId | type == "string" and length > 5)
+      and (.createdAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+      and (.sourceSnapshot.file | type == "string" and length > 0)
+      and (.sourceSnapshot.sha256 | test("^[a-f0-9]{64}$"))
+      and (.preserved.services | type == "array")
+      and (.preserved.volumes | type == "array")
+      and (.preserved.routes | type == "array")
+      and (.preserved.environmentKeys | type == "array")
+      and (.renamed | type == "object")
+      and (.removed | type == "array")
+      and all(.removed[]; (.item | type == "string" and length > 0) and (.reason | type == "string" and length > 12))
+      and (.added | type == "array")
+      and (.verification | type == "array" and length > 0)
+    ' "$file" >/dev/null 2>&1; then
+        pm_lint_report PM027 "$path" 1 \
+            "Preservation manifest does not satisfy schema version 1.0" \
+            "Run 'pm-preservation-manifest validate $path' and complete the required snapshot, preservation, change, and verification fields."
+    fi
+}
+
+pm_lint_register_rule PM027 ERROR file \
+    "Preservation manifest schema" \
+    "EPC A12.8; PM-PAT-006" \
+    pm_lint_rule_pm027

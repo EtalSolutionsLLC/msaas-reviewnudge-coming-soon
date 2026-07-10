@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_database() {
+    local scopes='database,db,web,app,jobs,worker'
+    pm_config_register DB_PROVIDER_PLATFORM_CODE var "$scopes" DB_PROVIDER_PLATFORM_CODE optional
+    pm_config_register DB_PROVIDER var "$scopes" DB_PROVIDER optional
+    pm_config_register DB_PLATFORM var "$scopes" DB_PLATFORM optional
+    pm_config_register DB_HOST var "$scopes" DB_HOST optional
+    pm_config_register DB_PORT var "$scopes" DB_PORT optional
+    pm_config_register DB_NAME var "$scopes" DB_NAME required
+    pm_config_register DATABASE_SSL_MODE var "$scopes" DATABASE_SSL_MODE optional
+    pm_config_register DB_USER secret "$scopes" DB_USER required
+    pm_config_register DB_PASSWORD secret "$scopes" DB_PASSWORD required
+    pm_config_register DB_ADMIN_USER secret 'database-admin,db' DB_ADMIN_USER optional
+    pm_config_register DB_ADMIN_PASSWORD secret 'database-admin,db' DB_ADMIN_PASSWORD optional
+    pm_config_register DATABASE_URL secret "$scopes" DATABASE_URL optional
+    pm_config_register DATABASE_DIRECT_URL secret "$scopes" DATABASE_DIRECT_URL optional
+}

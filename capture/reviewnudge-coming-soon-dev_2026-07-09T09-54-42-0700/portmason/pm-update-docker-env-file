@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# Usage:
+#   pm-update-docker-env-file [path-to-compose]
+#
+# Default file is ./docker-compose.yml
+
+main() {
+    FILE="${1:-docker-compose.yml}"
+
+    if [[ ! -f "$FILE" ]]; then
+    echo "ERROR: $FILE not found." >&2
+    exit 1
+    fi
+
+    if ! command -v yq >/dev/null 2>&1; then
+    echo "ERROR: 'yq' (mikefarah Go version) is required but not found in PATH." >&2
+    exit 1
+    fi
+
+    # Find env file in current directory:
+    # 1) Prefer .env if it exists
+    # 2) Otherwise, take the first *.env file (lexicographically)
+    ENV_FILE=""
+
+    if [[ -f ".env" ]]; then
+    ENV_FILE=".env"
+    else
+    shopt -s nullglob
+    env_candidates=( *.env )
+    shopt -u nullglob
+
+    if (( ${#env_candidates[@]} > 0 )); then
+        ENV_FILE="${env_candidates[0]}"
+    fi
+    fi
+
+    if [[ -z "$ENV_FILE" ]]; then
+    echo "ERROR: No env file found in current directory." >&2
+    echo "Looked for '.env' or '*.env' here: $(pwd)" >&2
+    exit 1
+    fi
+
+    echo "Using env file: $ENV_FILE"
+
+    # Backup original
+    cp "$FILE" "${FILE}.bak"
+
+    # For every service:
+    # - overwrite env_file with the detected ENV_FILE
+    # This uses Go yq v4 syntax.
+    yq eval -i ".services[].env_file = \"$ENV_FILE\"" "$FILE"
+
+    echo "Updated $FILE -> env_file: \"$ENV_FILE\" for all services."
+    echo "Backup saved as ${FILE}.bak."
+}
+
+main "$@"

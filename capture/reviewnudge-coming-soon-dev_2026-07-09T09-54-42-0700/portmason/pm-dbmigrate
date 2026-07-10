@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+if [[ -n "${BACK_END_CODE:-}" ]]; then
+  file="${PORTMASON_SHARE}/pm-dbmigrate-${BACK_END_CODE}-${ADAPTER_CODE}"
+  [[ -f "$file" ]] || return 0
+  # shellcheck disable=SC1090
+  . "$file" "$@"
+else
+  file="${PORTMASON_SHARE}/pm-dbmigrate-${RUNTIME_CODE}-${ADAPTER_CODE}"
+  [[ -f "$file" ]] || return 0
+  # shellcheck disable=SC1090
+  . "$file" "$@"
+fi
+

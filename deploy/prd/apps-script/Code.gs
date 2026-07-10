@@ -5,14 +5,16 @@
  * www/assets/waitlist-config.js at the Web App URL.
  *
  * Script Properties:
- *   SHEET_ID        Required. Target Google Sheet ID.
- *   SHEET_NAME      Optional. Defaults to "Waitlist".
+ *   SHEET_ID         Required. Target Google Sheet ID.
+ *   SHEET_NAME       Optional. Defaults to "Waitlist".
  *   AUDIT_SHEET_NAME Optional. Defaults to "WaitlistAudit".
  *
- * The public page submits with mode=no-cors, so the browser cannot read the
- * POST response. Each request therefore carries a trace ID. The browser polls
- * doGet?action=status&traceId=... through JSONP until this script confirms that
- * the exact row exists in the spreadsheet.
+ * The public page submits through one JSONP request:
+ *   doGet?action=subscribe&email=...&traceId=...&callback=...
+ *
+ * The request validates, deduplicates, writes, verifies, and returns the final
+ * state in the same response. doPost and action=status remain available for
+ * backward compatibility with older clients.
  */
 
 var WAITLIST_HEADERS = [
@@ -39,7 +41,33 @@ var AUDIT_HEADERS = [
 ];
 
 function doPost(e) {
-  var payload = parsePayload_(e);
+  return json_(processSubscription_(parsePayload_(e), 'POST'));
+}
+
+function doGet(e) {
+  var action = e && e.parameter ? String(e.parameter.action || '') : '';
+
+  if (action === 'subscribe') {
+    return output_(processSubscription_(e.parameter || {}, 'JSONP'), e);
+  }
+
+  if (action === 'status') {
+    return statusResponse_(e);
+  }
+
+  return output_({
+    ok: true,
+    service: 'reviewnudge-waitlist',
+    audit: true,
+    verification: true,
+    singleRequestSubscription: true,
+    checkedAt: new Date().toISOString()
+  }, e);
+}
+
+function processSubscription_(payload, requestKind) {
+  payload = payload || {};
+
   var traceId = normalizeTraceId_(payload.traceId) || Utilities.getUuid();
   var email = normalizeEmail_(payload.email);
   var source = safeText_(payload.source, 120) || 'reviewnudge-coming-soon';
@@ -53,7 +81,7 @@ function doPost(e) {
     traceId: traceId,
     source: source,
     emailHash: emailHash,
-    contentLength: e && e.postData ? e.postData.length : 0
+    requestKind: requestKind || ''
   });
 
   try {
@@ -66,76 +94,84 @@ function doPost(e) {
         traceId: traceId,
         detail: 'SHEET_ID is not configured.'
       });
-      return json_({
+      return {
         ok: false,
         traceId: traceId,
         state: 'configuration_failed',
+        recorded: false,
         error: 'SHEET_ID is not configured.'
+      };
+    }
+
+    if (!email) {
+      logEvent_('validation_failed', false, {
+        traceId: traceId,
+        source: source,
+        detail: 'A valid email address is required.'
       });
+      return {
+        ok: false,
+        traceId: traceId,
+        state: 'validation_failed',
+        recorded: false,
+        error: 'A valid email address is required.'
+      };
     }
 
     lock.waitLock(15000);
     lockAcquired = true;
 
     spreadsheet = SpreadsheetApp.openById(sheetId);
-    safeAudit_(spreadsheet, props, {
-      traceId: traceId,
-      event: 'request_received',
-      ok: true,
-      waitlistSheet: sheetName,
-      waitlistRow: '',
-      emailHash: emailHash,
-      source: source,
-      detail: 'POST accepted by Apps Script.'
-    });
-
-    if (!email) {
-      safeAudit_(spreadsheet, props, {
-        traceId: traceId,
-        event: 'validation_failed',
-        ok: false,
-        waitlistSheet: sheetName,
-        waitlistRow: '',
-        emailHash: '',
-        source: source,
-        detail: 'A valid email address is required.'
-      });
-      return json_({
-        ok: false,
-        traceId: traceId,
-        state: 'validation_failed',
-        error: 'A valid email address is required.'
-      });
-    }
-
     var sheet = spreadsheet.getSheetByName(sheetName) || spreadsheet.insertSheet(sheetName);
     ensureHeader_(sheet, WAITLIST_HEADERS);
 
-    var existingRow = findTraceRow_(sheet, traceId);
-    if (existingRow) {
+    var existingTraceRow = findTraceRow_(sheet, traceId);
+    if (existingTraceRow) {
       safeAudit_(spreadsheet, props, {
         traceId: traceId,
-        event: 'duplicate_confirmed',
+        event: 'duplicate_trace_confirmed',
         ok: true,
         waitlistSheet: sheetName,
-        waitlistRow: existingRow,
+        waitlistRow: existingTraceRow,
         emailHash: emailHash,
         source: source,
         detail: 'Trace ID already exists; duplicate write was skipped.'
       });
-      return json_({
+      return {
         ok: true,
         traceId: traceId,
-        state: 'duplicate_confirmed',
+        state: 'duplicate_trace_confirmed',
         recorded: true,
-        row: existingRow
+        duplicate: true,
+        row: existingTraceRow
+      };
+    }
+
+    var existingEmailRow = findEmailRow_(sheet, email);
+    if (existingEmailRow) {
+      safeAudit_(spreadsheet, props, {
+        traceId: traceId,
+        event: 'email_already_registered',
+        ok: true,
+        waitlistSheet: sheetName,
+        waitlistRow: existingEmailRow,
+        emailHash: emailHash,
+        source: source,
+        detail: 'Normalized email already exists; duplicate write was skipped.'
       });
+      return {
+        ok: true,
+        traceId: traceId,
+        state: 'email_already_registered',
+        recorded: true,
+        duplicate: true,
+        row: existingEmailRow
+      };
     }
 
     var targetRow = Math.max(sheet.getLastRow() + 1, 2);
-    var receivedAt = new Date();
-    var values = [[
-      receivedAt,
+    sheet.getRange(targetRow, 1, 1, WAITLIST_HEADERS.length).setValues([[
+      new Date(),
       email,
       source,
       safeText_(payload.page, 1000),
@@ -143,9 +179,7 @@ function doPost(e) {
       safeText_(payload.userAgent, 1000),
       safeText_(payload.submittedAt, 120),
       traceId
-    ]];
-
-    sheet.getRange(targetRow, 1, 1, WAITLIST_HEADERS.length).setValues(values);
+    ]]);
     SpreadsheetApp.flush();
 
     var saved = sheet.getRange(targetRow, 1, 1, WAITLIST_HEADERS.length).getValues()[0];
@@ -162,13 +196,13 @@ function doPost(e) {
         source: source,
         detail: 'The write completed but the saved row did not match the submitted email hash and trace ID.'
       });
-      return json_({
+      return {
         ok: false,
         traceId: traceId,
         state: 'row_verification_failed',
         recorded: false,
         error: 'The spreadsheet row could not be verified.'
-      });
+      };
     }
 
     safeAudit_(spreadsheet, props, {
@@ -182,20 +216,14 @@ function doPost(e) {
       detail: 'Waitlist row written and verified.'
     });
 
-    logEvent_('row_recorded', true, {
-      traceId: traceId,
-      sheetName: sheetName,
-      row: targetRow,
-      emailHash: emailHash
-    });
-
-    return json_({
+    return {
       ok: true,
       traceId: traceId,
       state: 'row_recorded',
       recorded: true,
+      duplicate: false,
       row: targetRow
-    });
+    };
   } catch (err) {
     var detail = compactError_(err);
 
@@ -207,55 +235,28 @@ function doPost(e) {
     });
 
     if (spreadsheet) {
-      try {
-        safeAudit_(spreadsheet, PropertiesService.getScriptProperties(), {
-          traceId: traceId,
-          event: 'exception',
-          ok: false,
-          waitlistSheet: sheetName,
-          waitlistRow: '',
-          emailHash: emailHash,
-          source: source,
-          detail: detail
-        });
-      } catch (auditErr) {
-        console.error(JSON.stringify({
-          service: 'reviewnudge-waitlist',
-          event: 'audit_exception',
-          traceId: traceId,
-          detail: compactError_(auditErr)
-        }));
-      }
+      safeAudit_(spreadsheet, PropertiesService.getScriptProperties(), {
+        traceId: traceId,
+        event: 'exception',
+        ok: false,
+        waitlistSheet: sheetName,
+        waitlistRow: '',
+        emailHash: emailHash,
+        source: source,
+        detail: detail
+      });
     }
 
-    return json_({
+    return {
       ok: false,
       traceId: traceId,
       state: 'exception',
       recorded: false,
       error: detail
-    });
+    };
   } finally {
-    if (lockAcquired) {
-      lock.releaseLock();
-    }
+    if (lockAcquired) lock.releaseLock();
   }
-}
-
-function doGet(e) {
-  var action = e && e.parameter ? String(e.parameter.action || '') : '';
-
-  if (action === 'status') {
-    return statusResponse_(e);
-  }
-
-  return output_({
-    ok: true,
-    service: 'reviewnudge-waitlist',
-    audit: true,
-    verification: true,
-    checkedAt: new Date().toISOString()
-  }, e);
 }
 
 function statusResponse_(e) {
@@ -290,13 +291,17 @@ function statusResponse_(e) {
     var row = sheet ? findTraceRow_(sheet, traceId) : 0;
     var latestAudit = findLatestAudit_(spreadsheet, props, traceId);
     var state = row ? 'row_recorded' : (latestAudit.event || 'pending');
-    var failed = !row && /(?:failed|exception)$/.test(state);
+    var duplicate = state === 'email_already_registered' || state === 'duplicate_trace_confirmed';
+    var confirmedRow = row || latestAudit.waitlistRow || 0;
+    var recorded = Boolean(confirmedRow) && (Boolean(row) || duplicate);
+    var failed = !recorded && /(?:failed|exception)$/.test(state);
 
     return output_({
       ok: !failed,
       traceId: traceId,
-      recorded: Boolean(row),
-      row: row || null,
+      recorded: recorded,
+      duplicate: duplicate,
+      row: confirmedRow || null,
       state: state,
       detail: latestAudit.detail || '',
       checkedAt: new Date().toISOString()
@@ -326,8 +331,7 @@ function parsePayload_(e) {
 
 function normalizeEmail_(value) {
   var email = String(value || '').trim().toLowerCase();
-  var ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  return ok ? email : '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 }
 
 function normalizeTraceId_(value) {
@@ -366,6 +370,19 @@ function findTraceRow_(sheet, traceId) {
   return match ? match.getRow() : 0;
 }
 
+function findEmailRow_(sheet, email) {
+  if (!sheet || sheet.getLastRow() < 2 || !email) return 0;
+
+  var emailColumn = WAITLIST_HEADERS.indexOf('email') + 1;
+  var values = sheet.getRange(2, emailColumn, sheet.getLastRow() - 1, 1).getValues();
+
+  for (var i = 0; i < values.length; i += 1) {
+    if (normalizeEmail_(values[i][0]) === email) return i + 2;
+  }
+
+  return 0;
+}
+
 function safeAudit_(spreadsheet, props, record) {
   try {
     var auditSheetName = props.getProperty('AUDIT_SHEET_NAME') || 'WaitlistAudit';
@@ -384,7 +401,6 @@ function safeAudit_(spreadsheet, props, record) {
       record.source || '',
       safeText_(record.detail, 1000)
     ]]);
-    SpreadsheetApp.flush();
 
     logEvent_(record.event || 'audit', Boolean(record.ok), {
       traceId: record.traceId || '',
@@ -409,7 +425,7 @@ function findLatestAudit_(spreadsheet, props, traceId) {
   var auditSheet = spreadsheet.getSheetByName(auditSheetName);
 
   if (!auditSheet || auditSheet.getLastRow() < 2) {
-    return { event: '', detail: '' };
+    return { event: '', detail: '', waitlistRow: 0 };
   }
 
   var values = auditSheet
@@ -420,12 +436,13 @@ function findLatestAudit_(spreadsheet, props, traceId) {
     if (String(values[i][1] || '') === traceId) {
       return {
         event: String(values[i][2] || ''),
-        detail: String(values[i][8] || '')
+        detail: String(values[i][8] || ''),
+        waitlistRow: Number(values[i][5] || 0)
       };
     }
   }
 
-  return { event: '', detail: '' };
+  return { event: '', detail: '', waitlistRow: 0 };
 }
 
 function hashText_(value) {
@@ -453,11 +470,8 @@ function logEvent_(event, ok, fields) {
   payload.ok = Boolean(ok);
   payload.timestamp = new Date().toISOString();
 
-  if (ok) {
-    console.log(JSON.stringify(payload));
-  } else {
-    console.error(JSON.stringify(payload));
-  }
+  if (ok) console.log(JSON.stringify(payload));
+  else console.error(JSON.stringify(payload));
 }
 
 function output_(payload, e) {

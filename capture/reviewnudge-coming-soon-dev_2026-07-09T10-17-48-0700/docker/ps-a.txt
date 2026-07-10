@@ -1,0 +1,5 @@
+CONTAINER ID   IMAGE                            COMMAND                  CREATED          STATUS             PORTS                                          NAMES
+2dcea8e8853d   nginx:1.27-alpine                "/docker-entrypoint.…"   25 seconds ago   Up 24 seconds      80/tcp                                         reviewnudge-coming-soon-dev-web-1
+00e7555a4529   local/cloudflared:latest         "cloudflared tunnel …"   16 hours ago     Up 16 hours                                                       traefik-dev-cloudflared-1
+4dc300f115c2   ghcr.io/traefik/traefik:v3.7.5   "/entrypoint.sh --co…"   16 hours ago     Up About an hour   127.0.0.1:80->80/tcp, 127.0.0.1:443->443/tcp   traefik-dev-traefik-1
+e898bdbc0e2a   nginx:1.27-alpine                "/docker-entrypoint.…"   12 days ago      Up About an hour   80/tcp                                         www-dev-web-1

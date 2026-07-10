@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+
+neon_set_context() {
+    local key="${1:?key required}" value="${2-}"
+    env_init_set "$key" "$value"
+    log DEBUG "updated shared context" "key=$key"
+}
+
+neon_ensure_project() {
+    local response matches count body created list_path create_path org_query=""
+    : "${NEON_PROJECT_NAME:=${STACK:?STACK required}}"
+    export NEON_PROJECT_NAME
+
+    if [[ -n "${NEON_PROJECT_ID:-}" ]]; then
+        neon_api_request response GET "/projects/${NEON_PROJECT_ID}"
+        neon_set_context NEON_PROJECT_NAME \
+            "$(jq -r '.project.name // empty' <<<"$response")"
+        [[ -n "$NEON_PROJECT_NAME" ]] \
+            || die "project $NEON_PROJECT_ID returned no name" 2
+        log INFO "using configured project" \
+            "project_id=$NEON_PROJECT_ID" "project_name=$NEON_PROJECT_NAME"
+        return 0
+    fi
+
+    list_path='/projects?limit=100'
+    create_path='/projects'
+    if [[ -n "${NEON_ORG_ID:-}" ]]; then
+        neon_urlencode org_query "$NEON_ORG_ID"
+        list_path+="&org_id=${org_query}"
+        create_path+="?org_id=${org_query}"
+    fi
+
+    neon_api_request response GET "$list_path"
+    matches="$(jq -c --arg name "$NEON_PROJECT_NAME" \
+        '[.projects[]? | select(.name == $name)]' <<<"$response")"
+    count="$(jq 'length' <<<"$matches")"
+    if (( count > 1 )); then
+        die "multiple projects named $NEON_PROJECT_NAME; set NEON_PROJECT_ID" 2
+    fi
+    if (( count == 1 )); then
+        neon_set_context NEON_PROJECT_ID "$(jq -r '.[0].id' <<<"$matches")"
+        log INFO "using existing project" \
+            "project_id=$NEON_PROJECT_ID" "project_name=$NEON_PROJECT_NAME"
+        return 0
+    fi
+
+    body="$(jq -nc \
+        --arg name "$NEON_PROJECT_NAME" \
+        --arg region_id "$NEON_REGION_ID" \
+        --argjson pg_version "$NEON_PG_VERSION" \
+        '{project:{name:$name,region_id:$region_id,pg_version:$pg_version}}')"
+    if [[ -n "${NEON_ORG_ID:-}" ]]; then
+        # Neon documents org_id as a query parameter for personal API keys, but
+        # the create-project endpoint also accepts it in the project payload and
+        # may reject POST /projects when it is absent from the body. Keep the
+        # query parameter for documented personal-key behavior and include the
+        # same validated organization ID in the payload for create compatibility.
+        body="$(jq -c --arg org_id "$NEON_ORG_ID" '.project.org_id = $org_id' <<<"$body")"
+    fi
+
+    log INFO "creating project" \
+        "project_name=$NEON_PROJECT_NAME" "region=$NEON_REGION_ID" \
+        "pg_version=$NEON_PG_VERSION"
+    neon_api_request created POST "$create_path" "$body"
+    neon_wait_for_operations "$created"
+    neon_set_context NEON_PROJECT_ID "$(jq -r '.project.id // empty' <<<"$created")"
+    [[ -n "$NEON_PROJECT_ID" ]] \
+        || die "project creation returned no project ID" 2
+
+    local branch_id endpoint_id
+    branch_id="$(jq -r '.branch.id // empty' <<<"$created")"
+    endpoint_id="$(jq -r '.endpoints[]? | select(.type == "read_write") | .id' \
+        <<<"$created" | head -n1)"
+    [[ -n "$branch_id" ]] && neon_set_context NEON_BRANCH_ID "$branch_id"
+    [[ -n "$endpoint_id" ]] && neon_set_context NEON_ENDPOINT_ID "$endpoint_id"
+    log INFO "project created" "project_id=$NEON_PROJECT_ID"
+}
+
+neon_ensure_branch() {
+    local response matches count body created
+    neon_api_request response GET "/projects/${NEON_PROJECT_ID}/branches"
+
+    if [[ -n "${NEON_BRANCH_ID:-}" ]]; then
+        matches="$(jq -c --arg id "$NEON_BRANCH_ID" \
+            '[.branches[]? | select(.id == $id)]' <<<"$response")"
+    else
+        matches="$(jq -c --arg name "$NEON_BRANCH_NAME" \
+            '[.branches[]? | select(.name == $name)]' <<<"$response")"
+        if [[ "$(jq 'length' <<<"$matches")" == 0 && "$NEON_BRANCH_NAME" == main ]]; then
+            matches="$(jq -c '[.branches[]? | select(.default == true)]' <<<"$response")"
+        fi
+    fi
+    count="$(jq 'length' <<<"$matches")"
+    if (( count > 1 )); then
+        die "multiple branches match; set NEON_BRANCH_ID" 2
+    fi
+    if (( count == 1 )); then
+        neon_set_context NEON_BRANCH_ID "$(jq -r '.[0].id' <<<"$matches")"
+        neon_set_context NEON_BRANCH_NAME "$(jq -r '.[0].name' <<<"$matches")"
+        log INFO "using existing branch" \
+            "branch_id=$NEON_BRANCH_ID" "branch_name=$NEON_BRANCH_NAME"
+        return 0
+    fi
+
+    body="$(jq -nc --arg name "$NEON_BRANCH_NAME" '{branch:{name:$name}}')"
+    log INFO "creating branch" "branch_name=$NEON_BRANCH_NAME"
+    neon_api_request created POST "/projects/${NEON_PROJECT_ID}/branches" "$body"
+    neon_wait_for_operations "$created"
+    neon_set_context NEON_BRANCH_ID "$(jq -r '.branch.id // empty' <<<"$created")"
+    [[ -n "$NEON_BRANCH_ID" ]] \
+        || die "branch creation returned no branch ID" 2
+    log INFO "branch created" "branch_id=$NEON_BRANCH_ID"
+}
+
+neon_ensure_endpoint() {
+    local response matches count body created
+    neon_api_request response GET "/projects/${NEON_PROJECT_ID}/endpoints"
+
+    if [[ -n "${NEON_ENDPOINT_ID:-}" ]]; then
+        matches="$(jq -c --arg id "$NEON_ENDPOINT_ID" \
+            '[.endpoints[]? | select(.id == $id)]' <<<"$response")"
+    else
+        matches="$(jq -c --arg branch_id "$NEON_BRANCH_ID" \
+            '[.endpoints[]? | select(.branch_id == $branch_id and .type == "read_write" and (.disabled // false) == false)]' \
+            <<<"$response")"
+    fi
+    count="$(jq 'length' <<<"$matches")"
+    if (( count > 1 )); then
+        die "multiple active read-write endpoints match; set NEON_ENDPOINT_ID" 2
+    fi
+    if (( count == 1 )); then
+        neon_set_context NEON_ENDPOINT_ID "$(jq -r '.[0].id' <<<"$matches")"
+        log INFO "using existing endpoint" \
+            "endpoint_id=$NEON_ENDPOINT_ID" "branch_id=$NEON_BRANCH_ID"
+        return 0
+    fi
+
+    body="$(jq -nc --arg branch_id "$NEON_BRANCH_ID" \
+        '{endpoint:{branch_id:$branch_id,type:"read_write"}}')"
+    log INFO "creating read-write endpoint" \
+        "branch_id=$NEON_BRANCH_ID"
+    neon_api_request created POST "/projects/${NEON_PROJECT_ID}/endpoints" "$body"
+    neon_wait_for_operations "$created"
+    neon_set_context NEON_ENDPOINT_ID "$(jq -r '.endpoint.id // .endpoints[0].id // empty' <<<"$created")"
+    [[ -n "$NEON_ENDPOINT_ID" ]] \
+        || die "endpoint creation returned no endpoint ID" 2
+    log INFO "endpoint created" "endpoint_id=$NEON_ENDPOINT_ID"
+}
+
+pm_provision_db_platform() {
+    [[ "${DB_PLATFORM:-}" == neon ]] \
+        || die "pm-provision-neon requires DB_PLATFORM=neon" 2
+
+    neon_load_api_key
+    neon_sync_control_secret
+    log INFO "starting database platform provisioning" \
+        "stack=${STACK:-}" "project_name=${NEON_PROJECT_NAME:-${STACK:-}}" \
+        "branch=${NEON_BRANCH_NAME:-main}" "region=$NEON_REGION_ID"
+
+    neon_ensure_project
+    neon_ensure_branch
+    neon_ensure_endpoint
+
+    log INFO "database platform provisioning complete" \
+        "project_id=$NEON_PROJECT_ID" "branch_id=$NEON_BRANCH_ID" \
+        "endpoint_id=$NEON_ENDPOINT_ID"
+}
+
+main() {
+    pm_provision_db_platform "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

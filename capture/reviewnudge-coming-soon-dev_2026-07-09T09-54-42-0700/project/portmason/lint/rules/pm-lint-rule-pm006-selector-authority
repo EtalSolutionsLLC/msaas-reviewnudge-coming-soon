@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm006() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local key record line_no
+    local -a keys=(RUNTIME_CODE ADAPTER_CODE DB_PROVIDER DB_PLATFORM)
+
+    pm_lint_is_operator_env_file "$path" || return 0
+    for key in "${keys[@]}"; do
+        record="$(grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" | head -n1 || true)"
+        [[ -n "$record" ]] || continue
+        line_no="${record%%:*}"
+        pm_lint_report PM006 "$path" "$line_no" \
+            "$key is derived and must not be authored as an independent source of truth" \
+            "Set RUNTIME_ADAPTER_CODE or DB_PROVIDER_PLATFORM_CODE; derive component selectors at the lifecycle phase that uses them."
+    done
+}
+
+pm_lint_register_rule PM006 ERROR file \
+    "Composite selector authority" \
+    "TGF Canonical Keys; EPC A12.1; EPC C5.1" \
+    pm_lint_rule_pm006

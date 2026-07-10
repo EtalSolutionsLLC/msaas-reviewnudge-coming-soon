@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_core() {
+    pm_config_register PROJECT_ID var '*' PROJECT_ID optional
+    pm_config_register STACK var '*' STACK required
+    pm_config_register DEPLOYMENT_ID var '*' DEPLOYMENT_ID optional
+    pm_config_register APP_SLUG var '*' APP_SLUG optional
+    pm_config_register DEPLOY_ENV var '*' DEPLOY_ENV optional
+    pm_config_register CM_ENV var '*' CM_ENV optional
+    pm_config_register APP_HOST var 'routing,web,app,worker,jobs,proxy' APP_HOST optional
+    pm_config_register APP_URL var 'routing,web,app,worker,jobs,proxy' APP_URL optional
+    pm_config_register SITE_URL var 'routing,web,app,worker,jobs,proxy' SITE_URL optional
+    pm_config_register URI_SCHEME var 'routing,web,app,proxy' URI_SCHEME optional
+    pm_config_register LOG_LEVEL var 'observability,web,app,worker,jobs,proxy' LOG_LEVEL optional
+    pm_config_register LOG_FORMAT var 'observability,web,app,worker,jobs,proxy' LOG_FORMAT optional
+}

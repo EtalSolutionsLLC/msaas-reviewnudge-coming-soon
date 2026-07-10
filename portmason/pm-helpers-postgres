@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PostgreSQL provider helpers. Safe to source: no provisioning or deployment.
+
+if [[ "${__PM_HELPERS_POSTGRES_LOADED:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+__PM_HELPERS_POSTGRES_LOADED=1
+export __PM_HELPERS_POSTGRES_LOADED
+
+pm_db_postgres_uri_decode() {
+    local out_var="${1:?output variable required}"
+    local value="${2-}"
+    local result="" prefix hex decoded
+
+    while [[ "$value" == *%* ]]; do
+        prefix="${value%%\%*}"
+        result+="$prefix"
+        value="${value#*%}"
+        if [[ ! "$value" =~ ^([0-9A-Fa-f]{2})(.*)$ ]]; then
+            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid percent escape"
+            export PM_DB_POSTGRES_PARSE_ERROR
+            return 1
+        fi
+        hex="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        if [[ "${hex,,}" == "00" ]]; then
+            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an unsupported NUL escape"
+            export PM_DB_POSTGRES_PARSE_ERROR
+            return 1
+        fi
+        printf -v decoded '%b' "\\x${hex}"
+        result+="$decoded"
+    done
+
+    result+="$value"
+    printf -v "$out_var" '%s' "$result"
+}
+
+pm_db_postgres_uri_encode() {
+    local out_var="${1:?output variable required}"
+    local value="${2-}"
+    local result="" char hex i
+    LC_ALL=C
+    for ((i=0; i<${#value}; i++)); do
+        char="${value:i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-]) result+="$char" ;;
+            *)
+                printf -v hex '%02X' "'$char"
+                result+="%${hex}"
+                ;;
+        esac
+    done
+    printf -v "$out_var" '%s' "$result"
+}
+
+pm_db_postgres_parse_url() {
+    local database_url="${1:-}"
+    local remainder userinfo host_and_path authority database_path
+    local encoded_user encoded_password encoded_database encoded_host
+    local host port suffix
+
+    PM_DB_POSTGRES_PARSE_ERROR=""
+    export PM_DB_POSTGRES_PARSE_ERROR
+
+    case "$database_url" in
+        postgres://*) remainder="${database_url#postgres://}" ;;
+        postgresql://*) remainder="${database_url#postgresql://}" ;;
+        *)
+            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must begin with postgres:// or postgresql://"
+            export PM_DB_POSTGRES_PARSE_ERROR
+            return 1
+            ;;
+    esac
+
+    if [[ "$remainder" != *@* ]]; then
+        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include user credentials"
+        export PM_DB_POSTGRES_PARSE_ERROR
+        return 1
+    fi
+    userinfo="${remainder%@*}"
+    host_and_path="${remainder##*@}"
+
+    if [[ "$userinfo" != *:* ]]; then
+        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include both user and password"
+        export PM_DB_POSTGRES_PARSE_ERROR
+        return 1
+    fi
+    encoded_user="${userinfo%%:*}"
+    encoded_password="${userinfo#*:}"
+
+    if [[ -z "$encoded_user" || -z "$encoded_password" ]]; then
+        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL credentials are incomplete"
+        export PM_DB_POSTGRES_PARSE_ERROR
+        return 1
+    fi
+    if [[ "$host_and_path" != */* ]]; then
+        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include a database name"
+        export PM_DB_POSTGRES_PARSE_ERROR
+        return 1
+    fi
+
+    authority="${host_and_path%%/*}"
+    database_path="${host_and_path#*/}"
+    encoded_database="${database_path%%\?*}"
+    encoded_database="${encoded_database%%\#*}"
+
+    if [[ "$authority" == \[* ]]; then
+        if [[ "$authority" != *\]* ]]; then
+            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid IPv6 host"
+            export PM_DB_POSTGRES_PARSE_ERROR
+            return 1
+        fi
+        encoded_host="${authority#\[}"
+        encoded_host="${encoded_host%%\]*}"
+        suffix="${authority#*\]}"
+        case "$suffix" in
+            "") port="5432" ;;
+            :*) port="${suffix#:}" ;;
+            *)
+                PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid host/port"
+                export PM_DB_POSTGRES_PARSE_ERROR
+                return 1
+                ;;
+        esac
+    elif [[ "$authority" == *:* ]]; then
+        encoded_host="${authority%:*}"
+        port="${authority##*:}"
+    else
+        encoded_host="$authority"
+        port="5432"
+    fi
+
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL port must be an integer between 1 and 65535"
+        export PM_DB_POSTGRES_PARSE_ERROR
+        return 1
+    fi
+
+    pm_db_postgres_uri_decode DB_USER "$encoded_user" || return 1
+    pm_db_postgres_uri_decode DB_PASSWORD "$encoded_password" || return 1
+    pm_db_postgres_uri_decode DB_NAME "$encoded_database" || return 1
+    pm_db_postgres_uri_decode host "$encoded_host" || return 1
+
+    DB_HOST="$host"
+    DB_PORT="$port"
+    export DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME
+    return 0
+}
+
+pm_db_postgres_build_url() {
+    local out_var="${1:?output variable required}"
+    local host="${2:?host required}"
+    local port="${3:?port required}"
+    local database="${4:?database required}"
+    local user="${5:?user required}"
+    local password="${6:?password required}"
+    local sslmode="${7:-${DATABASE_SSL_MODE:-disable}}"
+    local user_enc pass_enc db_enc result
+
+    pm_db_postgres_uri_encode user_enc "$user"
+    pm_db_postgres_uri_encode pass_enc "$password"
+    pm_db_postgres_uri_encode db_enc "$database"
+
+    if [[ "$host" == /* ]]; then
+        local host_enc
+        pm_db_postgres_uri_encode host_enc "$host"
+        result="postgresql://${user_enc}:${pass_enc}@localhost/${db_enc}?host=${host_enc}&sslmode=${sslmode}"
+    elif [[ "$host" == *:* && "$host" != \[*\] ]]; then
+        result="postgresql://${user_enc}:${pass_enc}@[${host}]:${port}/${db_enc}?sslmode=${sslmode}"
+    else
+        result="postgresql://${user_enc}:${pass_enc}@${host}:${port}/${db_enc}?sslmode=${sslmode}"
+    fi
+
+    printf -v "$out_var" '%s' "$result"
+}
+
+pm_db_postgres_validate_identifier() {
+    local value="${1:-}"
+    [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_$-]{0,62}$ ]]
+}
+
+pm_db_postgres_parse_url_into() {
+    local prefix="${1:?prefix required}"
+    local database_url="${2:?database URL required}"
+    local had_host=0 had_port=0 had_user=0 had_password=0 had_name=0
+    local save_host="${DB_HOST-}" save_port="${DB_PORT-}" save_user="${DB_USER-}"
+    local save_password="${DB_PASSWORD-}" save_name="${DB_NAME-}"
+
+    [[ -v DB_HOST ]] && had_host=1
+    [[ -v DB_PORT ]] && had_port=1
+    [[ -v DB_USER ]] && had_user=1
+    [[ -v DB_PASSWORD ]] && had_password=1
+    [[ -v DB_NAME ]] && had_name=1
+
+    if ! pm_db_postgres_parse_url "$database_url"; then
+        (( had_host )) && DB_HOST="$save_host" || unset DB_HOST
+        (( had_port )) && DB_PORT="$save_port" || unset DB_PORT
+        (( had_user )) && DB_USER="$save_user" || unset DB_USER
+        (( had_password )) && DB_PASSWORD="$save_password" || unset DB_PASSWORD
+        (( had_name )) && DB_NAME="$save_name" || unset DB_NAME
+        return 1
+    fi
+
+    printf -v "${prefix}_HOST" '%s' "$DB_HOST"
+    printf -v "${prefix}_PORT" '%s' "$DB_PORT"
+    printf -v "${prefix}_USER" '%s' "$DB_USER"
+    printf -v "${prefix}_PASSWORD" '%s' "$DB_PASSWORD"
+    printf -v "${prefix}_DATABASE" '%s' "$DB_NAME"
+
+    (( had_host )) && DB_HOST="$save_host" || unset DB_HOST
+    (( had_port )) && DB_PORT="$save_port" || unset DB_PORT
+    (( had_user )) && DB_USER="$save_user" || unset DB_USER
+    (( had_password )) && DB_PASSWORD="$save_password" || unset DB_PASSWORD
+    (( had_name )) && DB_NAME="$save_name" || unset DB_NAME
+}
+
+pm_db_provider_preflight() {
+    [[ "${DB_PROVIDER_CODE:-}" == "postgres" ]] || return 0
+
+    if [[ -n "${DB_NAME:-}" ]] && ! pm_db_postgres_validate_identifier "$DB_NAME"; then
+        pm_preflight_error "database.provider" "DB_NAME" \
+            "must be a valid PostgreSQL identifier of no more than 63 characters"
+    fi
+    if [[ -n "${DB_USER:-}" ]] && ! pm_db_postgres_validate_identifier "$DB_USER"; then
+        pm_preflight_error "database.provider" "DB_USER" \
+            "must be a valid PostgreSQL identifier of no more than 63 characters"
+    fi
+}
+
+pm_db_provider_prepare() {
+    [[ "${DB_PROVIDER_CODE:-}" == "postgres" ]] || return 0
+
+    env_init_set DB_PORT "${DB_PORT:-5432}"
+    env_init_set DATABASE_SSL_MODE "${DATABASE_SSL_MODE:-disable}"
+
+    if [[ -n "${DB_NAME:-}" && -n "${DB_USER:-}" && -n "${DB_PASSWORD:-}" ]]; then
+        if [[ -n "${DB_HOST:-}" && -z "${DATABASE_URL:-}" ]]; then
+            local url
+            pm_db_postgres_build_url url "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" "$DATABASE_SSL_MODE"
+            env_init_set DATABASE_URL "$url"
+            log DEBUG "pm-helpers-postgres: built DATABASE_URL from canonical values" \
+                "host=$DB_HOST" "port=$DB_PORT" "database=$DB_NAME"
+        elif [[ -z "${DB_HOST:-}" ]]; then
+            log DEBUG "pm-helpers-postgres: canonical identity/credentials present; platform will supply DB_HOST"
+        else
+            log DEBUG "pm-helpers-postgres: canonical database contract already populated"
+        fi
+        return 0
+    fi
+
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+        if pm_db_postgres_parse_url "$DATABASE_URL"; then
+            env_init_set DB_HOST "$DB_HOST"
+            env_init_set DB_PORT "$DB_PORT"
+            env_init_set DB_USER "$DB_USER"
+            env_init_set DB_PASSWORD "$DB_PASSWORD"
+            env_init_set DB_NAME "$DB_NAME"
+            log INFO "pm-helpers-postgres: derived canonical database configuration from DATABASE_URL" \
+                "host=$DB_HOST" "port=$DB_PORT" "database=$DB_NAME"
+        else
+            log WARN "pm-helpers-postgres: DATABASE_URL could not be normalized; aggregate preflight will report it"
+        fi
+        return 0
+    fi
+
+    log DEBUG "pm-helpers-postgres: database values will be completed by lifecycle modules"
+}

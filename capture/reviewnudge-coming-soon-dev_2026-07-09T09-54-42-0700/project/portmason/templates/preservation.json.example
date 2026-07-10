@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0",
+  "migrationId": "BUILD-NNN-project-description",
+  "createdAt": "YYYY-MM-DD",
+  "sourceSnapshot": {
+    "file": "project-env_YYYY-MM-DDTHH-MM-SS-ZZZZ.tar.gz",
+    "sha256": "64 lowercase hexadecimal characters"
+  },
+  "preserved": {
+    "services": [],
+    "volumes": [],
+    "routes": [],
+    "environmentKeys": []
+  },
+  "renamed": {},
+  "removed": [
+    {
+      "item": "LEGACY_ITEM",
+      "reason": "Replaced by the canonical pattern."
+    }
+  ],
+  "added": [],
+  "verification": []
+}

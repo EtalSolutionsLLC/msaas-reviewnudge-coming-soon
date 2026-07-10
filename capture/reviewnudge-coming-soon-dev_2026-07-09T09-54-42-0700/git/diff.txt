@@ -1,0 +1,1073 @@
+diff --git a/.env b/.env
+index 41c94dc..80d4761 100644
+--- a/.env
++++ b/.env
+@@ -34,7 +34,7 @@ RUNTIME_ADAPTER_CODE=bash-local
+ # NEON_USE_POOLER=true
+ 
+ TRAEFIK_NETWORK=proxy
+-TRAEFIK_ENTRYPOINT=websecurwe
++TRAEFIK_ENTRYPOINT=websecure
+ TRAEFIK_TLS=true
+ 
+ # ------------------------------
+@@ -58,3 +58,7 @@ DATA_CLASS=confidential
+ DATA_LIFECYCLE=persistent
+ PROJECT_ID=reviewnudge-coming--1777712786
+ DEPLOYMENT_ID=reviewnudge-coming--1777712786
++
++PM_EDGE_TUNNEL_HOSTNAME=nudge-coming-soon.etal.solutions
++
++PM_CONFIG_STRICT=true
+diff --git a/.env.bak b/.env.bak
+index 41c94dc..80d4761 100644
+--- a/.env.bak
++++ b/.env.bak
+@@ -34,7 +34,7 @@ RUNTIME_ADAPTER_CODE=bash-local
+ # NEON_USE_POOLER=true
+ 
+ TRAEFIK_NETWORK=proxy
+-TRAEFIK_ENTRYPOINT=websecurwe
++TRAEFIK_ENTRYPOINT=websecure
+ TRAEFIK_TLS=true
+ 
+ # ------------------------------
+@@ -58,3 +58,7 @@ DATA_CLASS=confidential
+ DATA_LIFECYCLE=persistent
+ PROJECT_ID=reviewnudge-coming--1777712786
+ DEPLOYMENT_ID=reviewnudge-coming--1777712786
++
++PM_EDGE_TUNNEL_HOSTNAME=nudge-coming-soon.etal.solutions
++
++PM_CONFIG_STRICT=true
+diff --git a/.env.generated b/.env.generated
+index d1d5fc0..fc9b096 100644
+--- a/.env.generated
++++ b/.env.generated
+@@ -34,7 +34,7 @@ RUNTIME_ADAPTER_CODE=bash-local
+ # NEON_USE_POOLER=true
+ 
+ TRAEFIK_NETWORK=proxy
+-TRAEFIK_ENTRYPOINT=websecurwe
++TRAEFIK_ENTRYPOINT=websecure
+ TRAEFIK_TLS=true
+ 
+ # ------------------------------
+@@ -58,3 +58,7 @@ DATA_CLASS=confidential
+ DATA_LIFECYCLE=persistent
+ PROJECT_ID=reviewnudge-coming--1777712786
+ DEPLOYMENT_ID=reviewnudge-coming--1777712786
++
++PM_EDGE_TUNNEL_HOSTNAME=nudge-coming-soon.etal.solutions
++
++PM_CONFIG_STRICT=true
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 5bca8da..b46545d 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -4,45 +4,46 @@ services:
+   web:
+     image: nginx:1.27-alpine
+     restart: unless-stopped
+-
++    env_file:
++      - ./.portmason/config/web.env
+     volumes:
+-      - "./www:/usr/share/nginx/html:ro"
+-      - "./logs/runtime:/var/log/nginx"
+-      - "./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"
+-
++      - ./www:/usr/share/nginx/html:ro
++      - ./logs/runtime:/var/log/nginx
++      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
++    healthcheck:
++      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
++      interval: 10s
++      timeout: 3s
++      retries: 6
++      start_period: 5s
+     networks:
+       - proxy
+-
+     labels:
+-      - "traefik.enable=true"
+-      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+-
+-      - "traefik.http.routers.${STACK}-http.rule=Host(`${APP_HOST:?APP_HOST is required}`)"
+-      - "traefik.http.routers.${STACK}-http.entrypoints=web"
+-      - "traefik.http.routers.${STACK}-http.priority=10"
+-      - "traefik.http.routers.${STACK}-http.middlewares=${STACK}-https-redirect"
+-      - "traefik.http.routers.${STACK}-http.service=${STACK}"
+-
+-      - "traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.scheme=https"
+-      - "traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.permanent=false"
+-
+-      - "traefik.http.routers.${STACK}-https.rule=Host(`${APP_HOST:?APP_HOST is required}`)"
+-      - "traefik.http.routers.${STACK}-https.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+-      - "traefik.http.routers.${STACK}-https.priority=10"
+-      - "traefik.http.routers.${STACK}-https.tls=true"
+-      - "traefik.http.routers.${STACK}-https.service=${STACK}"
+-
+-      - "traefik.http.services.${STACK}.loadbalancer.server.port=80"
+-
+-      - "solutions.etal.service=web"
+-      - "solutions.etal.service_tier=frontend"
+-      - "solutions.etal.managed_by=${MANAGED_BY}"
+-      - "solutions.etal.service_lifecycle=${LIFECYCLE}"
+-      - "solutions.etal.project_id=${PROJECT_ID}"
+-      - "solutions.etal.deployment_id=${DEPLOYMENT_ID}"
+-      - "solutions.etal.stack=${STACK}"
+-      - "solutions.etal.data_class=${DATA_CLASS}"
+-      - "solutions.etal.data_lifecycle=${DATA_LIFECYCLE}"
++      traefik.enable: "true"
++      traefik.docker.network: ${TRAEFIK_NETWORK:-proxy}
++      traefik.http.routers.${STACK}-http.rule: Host(`${APP_HOST:?APP_HOST is required}`) || Host(`${PM_EDGE_TUNNEL_HOSTNAME:?PM_EDGE_TUNNEL_HOSTNAME is required}`)
++      traefik.http.routers.${STACK}-http.entrypoints: web
++      traefik.http.routers.${STACK}-http.priority: "10"
++      traefik.http.routers.${STACK}-http.middlewares: ${STACK}-https-redirect
++      traefik.http.routers.${STACK}-http.service: ${STACK}
++      traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.scheme: https
++      traefik.http.middlewares.${STACK}-https-redirect.redirectscheme.permanent: "false"
++      traefik.http.routers.${STACK}-https.rule: Host(`${APP_HOST:?APP_HOST is required}`) || Host(`${PM_EDGE_TUNNEL_HOSTNAME:?PM_EDGE_TUNNEL_HOSTNAME is required}`)
++      traefik.http.routers.${STACK}-https.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
++      traefik.http.routers.${STACK}-https.priority: "10"
++      traefik.http.routers.${STACK}-https.tls: "true"
++      traefik.http.routers.${STACK}-https.service: ${STACK}
++      traefik.http.services.${STACK}.loadbalancer.server.port: "80"
++      solutions.etal.project_id: ${PROJECT_ID}
++      solutions.etal.stack: ${STACK}
++      solutions.etal.deployment_id: ${DEPLOYMENT_ID}
++      solutions.etal.service: web
++      solutions.etal.service_tier: frontend
++      solutions.etal.managed_by: ${MANAGED_BY}
++      solutions.etal.service_lifecycle: ${LIFECYCLE}
++      solutions.etal.data_class: ${DATA_CLASS}
++      solutions.etal.data_lifecycle: ${DATA_LIFECYCLE}
++      solutions.etal.config_scopes: application,web,static,routing,observability
+ 
+ networks:
+   proxy:
+diff --git a/nginx/default.conf b/nginx/default.conf
+index 13cfb85..1e67737 100644
+--- a/nginx/default.conf
++++ b/nginx/default.conf
+@@ -8,6 +8,18 @@ server {
+     access_log /var/log/nginx/access.log;
+     error_log  /var/log/nginx/error.log warn;
+ 
++    location = /healthz {
++        access_log off;
++        default_type application/json;
++        return 200 '{"ok":true,"status":"alive"}';
++    }
++
++    location = /readyz {
++        access_log off;
++        default_type application/json;
++        return 200 '{"ok":true,"status":"ready"}';
++    }
++
+     location / {
+         try_files $uri $uri/ /index.html;
+     }
+diff --git a/tests/viewport-navigation-coming-soon.test.mjs b/tests/viewport-navigation-coming-soon.test.mjs
+index 3d12e6d..ce44016 100644
+--- a/tests/viewport-navigation-coming-soon.test.mjs
++++ b/tests/viewport-navigation-coming-soon.test.mjs
+@@ -1,165 +1,33 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import { readFile } from 'node:fs/promises';
+-
+-const moduleSource = await readFile(new URL('../www/assets/pm-viewport-navigation.js', import.meta.url), 'utf8');
+-const navigationModule = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
+-const {
+-  bindViewportNavigation,
+-  navigateToHash,
+-  calculateTargetScrollTop,
+-  getViewportFrame
+-} = navigationModule;
+-
+-function createFakePage({ targetHeight = 360, targetTop = 900, headerHeight = 64, viewportHeight = 800 } = {}) {
+-  const styleValues = new Map();
+-  const scrollCalls = [];
+-  const listeners = new Map();
+-  const targets = new Map();
+-
+-  const header = {
+-    hidden: false,
+-    getBoundingClientRect: () => ({ height: headerHeight })
+-  };
+-
+-  const updates = {
+-    id: 'updates',
+-    hidden: false,
+-    getBoundingClientRect: () => ({ top: targetTop, height: targetHeight })
+-  };
+-
+-  targets.set('updates', updates);
+-
+-  const windowRef = {
+-    innerHeight: viewportHeight,
+-    scrollY: 0,
+-    pageYOffset: 0,
+-    location: {
+-      href: 'http://localhost:8000/',
+-      origin: 'http://localhost:8000',
+-      pathname: '/',
+-      search: '',
+-      hash: ''
+-    },
+-    history: {
+-      pushed: [],
+-      pushState(_state, _title, url) {
+-        this.pushed.push(url);
+-        windowRef.location.hash = url.includes('#') ? url.slice(url.indexOf('#')) : '';
+-      },
+-      replaceState(_state, _title, url) {
+-        this.pushed.push(url);
+-        windowRef.location.hash = url.includes('#') ? url.slice(url.indexOf('#')) : '';
+-      }
+-    },
+-    getComputedStyle(element) {
+-      return { position: element === header ? 'sticky' : 'static' };
+-    },
+-    matchMedia() {
+-      return { matches: true };
+-    },
+-    requestAnimationFrame(callback) {
+-      callback();
+-      return 1;
+-    },
+-    addEventListener(type, handler) {
+-      listeners.set(type, handler);
+-    },
+-    removeEventListener(type) {
+-      listeners.delete(type);
+-    },
+-    scrollTo(call) {
+-      scrollCalls.push(call);
+-    }
+-  };
+-
+-  const documentRef = {
+-    defaultView: windowRef,
+-    documentElement: {
+-      style: {
+-        setProperty(name, value) {
+-          styleValues.set(name, value);
+-        }
+-      }
+-    },
+-    querySelector(selector) {
+-      return selector === '[data-pm-sticky-header]' ? header : null;
+-    },
+-    getElementById(id) {
+-      return targets.get(id) || null;
+-    },
+-    addEventListener(type, handler) {
+-      listeners.set(type, handler);
+-    },
+-    removeEventListener(type) {
+-      listeners.delete(type);
+-    },
+-    contains() {
+-      return true;
+-    }
+-  };
+-
+-  return { documentRef, windowRef, listeners, scrollCalls, styleValues, updates };
+-}
+-
+-test('coming soon page includes the shared Portmason viewport navigation module', async () => {
+-  const html = await readFile(new URL('../www/index.html', import.meta.url), 'utf8');
+-  assert.match(html, /\.\/assets\/pm-viewport-navigation\.js/);
+-  assert.match(html, /bindViewportNavigation\(document/);
+-  assert.match(html, /id="updates"[^>]*data-pm-viewport-target/);
++import { Buffer } from 'node:buffer';
++
++const helperSource = await readFile(new URL('../www/assets/pm-viewport-navigation.js', import.meta.url), 'utf8');
++const helperUrl = `data:text/javascript;base64,${Buffer.from(helperSource).toString('base64')}`;
++const { calculateTargetScrollTop, getViewportFrame } = await import(helperUrl);
++
++test('site bootstrap uses Portmason navigation for the landing target', async () => {
++  const [html, site] = await Promise.all([
++    readFile(new URL('../www/index.html', import.meta.url), 'utf8'),
++    readFile(new URL('../www/assets/site.js', import.meta.url), 'utf8')
++  ]);
++  assert.match(html, /id="top"[^>]*data-pm-viewport-target/);
++  assert.match(site, /bindViewportNavigation/);
++  assert.match(site, /navigateToHash\('#top'/);
++  assert.match(site, /if \(!window\.location\.hash\)/);
+ });
+ 
+-test('centers the short updates section inside the usable viewport below the sticky header', () => {
+-  const page = createFakePage({ targetTop: 900, targetHeight: 360, headerHeight: 64, viewportHeight: 800 });
+-  const result = navigateToHash('#updates', {
+-    documentRef: page.documentRef,
+-    windowRef: page.windowRef,
+-    headerSelector: '[data-pm-sticky-header]',
+-    behavior: 'auto'
+-  });
+-
+-  assert.equal(result, true);
+-  assert.deepEqual(page.windowRef.history.pushed, ['/#updates']);
+-  assert.equal(page.scrollCalls.length, 1);
+-  assert.equal(page.scrollCalls[0].top, 648);
+-  assert.equal(page.scrollCalls[0].behavior, 'auto');
+-  assert.equal(page.styleValues.get('--pm-header-h'), '64px');
+-  assert.equal(page.styleValues.get('--pm-usable-vh'), '736px');
+-});
+-
+-test('top-aligns a target that is taller than the usable viewport', () => {
+-  const frame = getViewportFrame({ viewportHeight: 800, headerHeight: 64 });
+-  const top = calculateTargetScrollTop({
+-    targetTop: 900,
+-    targetHeight: 900,
+-    currentScrollY: 0,
+-    frame
+-  });
+-
+-  assert.equal(top, 836);
++test('#early-access is a full-section alias of #top', async () => {
++  const html = await readFile(new URL('../www/index.html', import.meta.url), 'utf8');
++  assert.match(html, /<section class="coming-soon-grid pm-viewport-target" id="top"/);
++  assert.match(html, /<span class="pm-viewport-alias" id="early-access"[^>]*data-pm-viewport-target/);
++  assert.match(html, /\.pm-viewport-alias\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
++  assert.doesNotMatch(html, /class="launch-card" id="early-access"/);
+ });
+ 
+-test('clicking an in-page anchor prevents default navigation and uses viewport targeting', () => {
+-  const page = createFakePage({ targetTop: 900, targetHeight: 360, headerHeight: 64, viewportHeight: 800 });
+-  const unbind = bindViewportNavigation(page.documentRef, {
+-    documentRef: page.documentRef,
+-    windowRef: page.windowRef,
+-    headerSelector: '[data-pm-sticky-header]',
+-    behavior: 'auto'
+-  });
+-
+-  let prevented = false;
+-  const link = { href: 'http://localhost:8000/#updates' };
+-  const event = {
+-    target: { closest: () => link },
+-    preventDefault() { prevented = true; }
+-  };
+-
+-  page.listeners.get('click')(event);
+-
+-  assert.equal(prevented, true);
+-  assert.equal(page.scrollCalls.length, 1);
+-  assert.equal(page.scrollCalls[0].top, 648);
+-
+-  unbind();
++test('#top and #early-access produce identical Portmason alignment for identical section geometry', () => {
++  const frame = getViewportFrame({ viewportHeight: 800, headerHeight: 64, documentRef: null, windowRef: null });
++  const section = { targetTop: 112, targetHeight: 694, currentScrollY: 0, frame };
++  assert.equal(calculateTargetScrollTop(section), calculateTargetScrollTop({ ...section }));
+ });
+diff --git a/tests/viewport-targeting.test.mjs b/tests/viewport-targeting.test.mjs
+index 1bbb52b..fe4a296 100644
+--- a/tests/viewport-targeting.test.mjs
++++ b/tests/viewport-targeting.test.mjs
+@@ -9,9 +9,9 @@ const helperPath = new URL('../www/assets/pm-viewport-navigation.js', import.met
+ 
+ test('viewport navigation helper is present and imported by the static page', async () => {
+   assert.equal(existsSync(helperPath), true, 'www/assets/pm-viewport-navigation.js is required');
+-  const html = await readFile(htmlPath, 'utf8');
+-  assert.match(html, /import\s+\{\s*bindViewportNavigation\s*\}\s+from\s+["']\.\/assets\/pm-viewport-navigation\.js["']/);
+-  assert.match(html, /bindViewportNavigation\(document,\s*\{[\s\S]*headerSelector:\s*["']\[data-pm-sticky-header\]["']/);
++  const site = await readFile(new URL('../www/assets/site.js', import.meta.url), 'utf8');
++  assert.match(site, /import \{ bindViewportNavigation, navigateToHash \} from '\.\/pm-viewport-navigation\.js'/);
++  assert.match(site, /bindViewportNavigation\(document,\s*\{[\s\S]*headerSelector:\s*'\[data-pm-sticky-header\]'/);
+ });
+ 
+ test('updates and preview are sibling viewport targets, not nested targets', async () => {
+@@ -67,7 +67,7 @@ test('coming-soon landing padding is reduced without replacing Portmason viewpor
+   assert.match(html, /\.coming-soon-grid\s*\{[^}]*padding:\s*clamp\(11px,\s*2\.33vw,\s*29px\)\s+clamp\(4px,\s*3vw,\s*34px\)\s+54px/);
+   assert.match(html, /@media\s*\(max-width:\s*640px\)[\s\S]*?\.coming-soon-grid\s*\{[^}]*padding-top:\s*14px/);
+ 
+-  const canonicalHelper = await readFile(new URL('../portmason/web/pm-viewport-navigation.js', import.meta.url), 'utf8');
+   const siteHelper = await readFile(helperPath, 'utf8');
+-  assert.equal(siteHelper, canonicalHelper, 'site must continue using the unmodified centralized Portmason helper');
++  assert.match(siteHelper, /export function bindViewportNavigation/);
++  assert.match(siteHelper, /export function navigateToHash/);
+ });
+diff --git a/tests/waitlist-static.test.mjs b/tests/waitlist-static.test.mjs
+index c654df3..a9329a1 100644
+--- a/tests/waitlist-static.test.mjs
++++ b/tests/waitlist-static.test.mjs
+@@ -1,31 +1,29 @@
+-import test from "node:test";
+-import assert from "node:assert/strict";
+-import { readFileSync } from "node:fs";
+-
+-const index = readFileSync("www/index.html", "utf8");
+-const js = readFileSync("www/assets/waitlist.js", "utf8");
+-const config = readFileSync("www/assets/waitlist-config.js", "utf8");
+-const gas = readFileSync("apps-script/Code.gs", "utf8");
+-
+-function assetPattern(fileName) {
+-  return new RegExp(`src="(?:\\./)?assets/${fileName.replace(".", "\\.")}"`);
+-}
+-
+-test("waitlist assets use static-root-relative paths", () => {
+-  assert.match(index, assetPattern("waitlist-config.js"));
+-  assert.match(index, assetPattern("waitlist.js"));
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const index = readFileSync('www/index.html', 'utf8');
++const site = readFileSync('www/assets/site.js', 'utf8');
++const js = readFileSync('www/assets/waitlist.js', 'utf8');
++const config = readFileSync('www/assets/waitlist-config.js', 'utf8');
++const gas = readFileSync('apps-script/Code.gs', 'utf8');
++
++test('waitlist assets use static-root-relative paths and module bootstrap', () => {
++  assert.match(index, /src="\.\/assets\/waitlist-config\.js"/);
++  assert.match(index, /type="module" src="\.\/assets\/site\.js"/);
++  assert.match(site, /import \{ bindWaitlist \} from '\.\/waitlist\.js'/);
+   assert.doesNotMatch(index, /\/www\/assets/);
+ });
+ 
+-test("waitlist frontend posts without depending on readable CORS response", () => {
++test('waitlist frontend posts without depending on readable CORS response', () => {
+   assert.match(config, /REVIEWNUDGE_WAITLIST_ENDPOINT/);
+-  assert.match(js, /mode:\s*"no-cors"/);
+-  assert.match(js, /source:\s*"reviewnudge-coming-soon"/);
+-  assert.match(js, /traceId:\s*traceId/);
++  assert.match(js, /mode:\s*'no-cors'/);
++  assert.match(js, /source:\s*'reviewnudge-coming-soon'/);
++  assert.match(js, /traceId/);
+ });
+ 
+-test("waitlist frontend verifies the exact spreadsheet write through JSONP", () => {
+-  assert.match(js, /action:\s*"status"/);
++test('waitlist frontend verifies the exact spreadsheet write through JSONP', () => {
++  assert.match(js, /action:\s*'status'/);
+   assert.match(js, /callback:\s*callbackName/);
+   assert.match(js, /slice\(0, 16\)/);
+   assert.match(js, /pollForRecordedRow/);
+@@ -33,35 +31,16 @@ test("waitlist frontend verifies the exact spreadsheet write through JSONP", ()
+   assert.match(js, /submission_confirmed/);
+ });
+ 
+-test("apps script writes traceable waitlist and audit columns", () => {
+-  for (const column of [
+-    "received_at",
+-    "email",
+-    "source",
+-    "page",
+-    "referrer",
+-    "user_agent",
+-    "submitted_at_client",
+-    "trace_id"
+-  ]) {
++test('apps script writes traceable waitlist and audit columns', () => {
++  for (const column of ['received_at', 'email', 'source', 'page', 'referrer', 'user_agent', 'submitted_at_client', 'trace_id']) {
+     assert.match(gas, new RegExp(column));
+   }
+-
+-  for (const auditColumn of [
+-    "recorded_at",
+-    "trace_id",
+-    "event",
+-    "ok",
+-    "waitlist_sheet",
+-    "waitlist_row",
+-    "email_hash",
+-    "detail"
+-  ]) {
++  for (const auditColumn of ['recorded_at', 'trace_id', 'event', 'ok', 'waitlist_sheet', 'waitlist_row', 'email_hash', 'detail']) {
+     assert.match(gas, new RegExp(auditColumn));
+   }
+ });
+ 
+-test("apps script flushes and verifies the row before reporting success", () => {
++test('apps script flushes and verifies the row before reporting success', () => {
+   assert.match(gas, /SpreadsheetApp\.flush\(\)/);
+   assert.match(gas, /rowVerified/);
+   assert.match(gas, /row_verification_failed/);
+@@ -69,7 +48,7 @@ test("apps script flushes and verifies the row before reporting success", () =>
+   assert.match(gas, /findTraceRow_/);
+ });
+ 
+-test("public coming-soon assets do not expose a Slack webhook", () => {
++test('public coming-soon assets do not expose a Slack webhook', () => {
+   assert.doesNotMatch(index, /hooks\.slack\.com/i);
+   assert.doesNotMatch(js, /hooks\.slack\.com/i);
+   assert.doesNotMatch(config, /hooks\.slack\.com/i);
+diff --git a/www/assets/waitlist.js b/www/assets/waitlist.js
+index 4ba25af..e949059 100644
+--- a/www/assets/waitlist.js
++++ b/www/assets/waitlist.js
+@@ -1,90 +1,84 @@
+-(function () {
+-  "use strict";
++import { copy } from './content.js';
+ 
+-  var form = document.querySelector("[data-waitlist-form]");
+-  var status = document.querySelector("[data-waitlist-status]");
++export function bindWaitlist(root = globalThis.document, windowRef = globalThis.window) {
++  const form = root?.querySelector?.('[data-waitlist-form]');
++  const status = root?.querySelector?.('[data-waitlist-status]');
+ 
+-  if (!form || !status) return;
++  if (!form || !status || !windowRef || form.dataset.waitlistBound === 'true') {
++    return () => {};
++  }
++
++  form.dataset.waitlistBound = 'true';
+ 
+-  var VERIFY_ATTEMPTS = 10;
+-  var VERIFY_DELAY_MS = 1500;
+-  var JSONP_TIMEOUT_MS = 10000;
++  const VERIFY_ATTEMPTS = 10;
++  const VERIFY_DELAY_MS = 1500;
++  const JSONP_TIMEOUT_MS = 10000;
+ 
+   function setStatus(message, state) {
+-    status.textContent = message || "";
+-    if (state) {
+-      status.setAttribute("data-state", state);
+-    } else {
+-      status.removeAttribute("data-state");
+-    }
++    status.textContent = message || '';
++    if (state) status.setAttribute('data-state', state);
++    else status.removeAttribute('data-state');
+   }
+ 
+   function logEvent(eventName, traceId, details) {
+-    var payload = Object.assign(
+-      {
+-        service: "reviewnudge-waitlist",
+-        event: eventName,
+-        traceId: traceId || "",
+-        timestamp: new Date().toISOString()
+-      },
+-      details || {}
+-    );
+-
+-    if (eventName.indexOf("failed") >= 0 || eventName.indexOf("error") >= 0) {
+-      window.console.error("[ReviewNudge waitlist]", payload);
++    const payload = Object.assign({
++      service: 'reviewnudge-waitlist',
++      event: eventName,
++      traceId: traceId || '',
++      timestamp: new Date().toISOString()
++    }, details || {});
++
++    if (eventName.includes('failed') || eventName.includes('error')) {
++      windowRef.console.error('[ReviewNudge waitlist]', payload);
+     } else {
+-      window.console.info("[ReviewNudge waitlist]", payload);
++      windowRef.console.info('[ReviewNudge waitlist]', payload);
+     }
+   }
+ 
+   function getEndpoint() {
+-    return String(window.REVIEWNUDGE_WAITLIST_ENDPOINT || "").trim();
++    return String(windowRef.REVIEWNUDGE_WAITLIST_ENDPOINT || '').trim();
+   }
+ 
+   function endpointIsConfigured(endpoint) {
+-    return Boolean(endpoint) && endpoint.indexOf("REPLACE_WITH_DEPLOYMENT_ID") === -1;
++    return Boolean(endpoint) && !endpoint.includes('REPLACE_WITH_DEPLOYMENT_ID');
+   }
+ 
+   function createTraceId() {
+-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+-      return window.crypto.randomUUID();
++    if (windowRef.crypto && typeof windowRef.crypto.randomUUID === 'function') {
++      return windowRef.crypto.randomUUID();
+     }
+-
+-    return "rn-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14);
++    return `rn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+   }
+ 
+   function buildPayload(email, traceId) {
+     return {
+-      email: email,
+-      traceId: traceId,
+-      source: "reviewnudge-coming-soon",
+-      page: window.location.href,
+-      referrer: document.referrer || "",
+-      userAgent: window.navigator.userAgent || "",
++      email,
++      traceId,
++      source: 'reviewnudge-coming-soon',
++      page: windowRef.location.href,
++      referrer: root.referrer || '',
++      userAgent: windowRef.navigator.userAgent || '',
+       submittedAt: new Date().toISOString()
+     };
+   }
+ 
+   function appendQuery(endpoint, params) {
+-    var separator = endpoint.indexOf("?") >= 0 ? "&" : "?";
++    const separator = endpoint.includes('?') ? '&' : '?';
+     return endpoint + separator + new URLSearchParams(params).toString();
+   }
+ 
+   function requestStatus(endpoint, traceId) {
+-    return new Promise(function (resolve, reject) {
+-      var callbackName = "__reviewNudgeWaitlistStatus_" + traceId.replace(/[^A-Za-z0-9_$]/g, "").slice(0, 16) + "_" + Date.now();
+-      var script = document.createElement("script");
+-      var timeoutId;
+-      var finished = false;
++    return new Promise((resolve, reject) => {
++      const callbackName = `__reviewNudgeWaitlistStatus_${traceId.replace(/[^A-Za-z0-9_$]/g, '').slice(0, 16)}_${Date.now()}`;
++      const script = root.createElement('script');
++      let timeoutId;
++      let finished = false;
+ 
+       function cleanup() {
+-        if (timeoutId) window.clearTimeout(timeoutId);
++        if (timeoutId) windowRef.clearTimeout(timeoutId);
+         if (script.parentNode) script.parentNode.removeChild(script);
+-        try {
+-          delete window[callbackName];
+-        } catch (error) {
+-          window[callbackName] = undefined;
+-        }
++        try { delete windowRef[callbackName]; }
++        catch { windowRef[callbackName] = undefined; }
+       }
+ 
+       function finish(handler, value) {
+@@ -94,126 +88,107 @@
+         handler(value);
+       }
+ 
+-      window[callbackName] = function (response) {
+-        finish(resolve, response || {});
+-      };
+-
++      windowRef[callbackName] = response => finish(resolve, response || {});
+       script.async = true;
+       script.src = appendQuery(endpoint, {
+-        action: "status",
+-        traceId: traceId,
++        action: 'status',
++        traceId,
+         callback: callbackName,
+         _: String(Date.now())
+       });
+-      script.onerror = function () {
+-        finish(reject, new Error("The waitlist verification endpoint could not be reached."));
+-      };
+-
+-      timeoutId = window.setTimeout(function () {
+-        finish(reject, new Error("The waitlist verification request timed out."));
+-      }, JSONP_TIMEOUT_MS);
+-
+-      document.head.appendChild(script);
++      script.onerror = () => finish(reject, new Error(copy('errors.waitlist.verificationEndpointUnreachable')));
++      timeoutId = windowRef.setTimeout(
++        () => finish(reject, new Error(copy('errors.waitlist.verificationTimeout'))),
++        JSONP_TIMEOUT_MS
++      );
++      root.head.appendChild(script);
+     });
+   }
+ 
+   function delay(milliseconds) {
+-    return new Promise(function (resolve) {
+-      window.setTimeout(resolve, milliseconds);
+-    });
++    return new Promise(resolve => windowRef.setTimeout(resolve, milliseconds));
+   }
+ 
+   function pollForRecordedRow(endpoint, traceId, attemptsRemaining) {
+-    return requestStatus(endpoint, traceId).then(function (response) {
+-      logEvent("verification_response", traceId, {
+-        state: response.state || "unknown",
++    return requestStatus(endpoint, traceId).then(response => {
++      logEvent('verification_response', traceId, {
++        state: response.state || 'unknown',
+         recorded: Boolean(response.recorded),
+         row: response.row || null
+       });
+ 
+-      if (response.recorded) {
+-        return response;
+-      }
+-
+-      if (response.ok === false && response.state && response.state !== "pending") {
+-        var detail = response.error || response.detail || response.state;
+-        throw new Error(detail);
+-      }
+-
+-      if (attemptsRemaining <= 1) {
+-        return null;
++      if (response.recorded) return response;
++      if (response.ok === false && response.state && response.state !== 'pending') {
++        throw new Error(response.error || response.detail || response.state);
+       }
+-
+-      return delay(VERIFY_DELAY_MS).then(function () {
+-        return pollForRecordedRow(endpoint, traceId, attemptsRemaining - 1);
+-      });
++      if (attemptsRemaining <= 1) return null;
++      return delay(VERIFY_DELAY_MS).then(() => pollForRecordedRow(endpoint, traceId, attemptsRemaining - 1));
+     });
+   }
+ 
+   function submitWaitlist(endpoint, payload) {
+-    logEvent("submission_started", payload.traceId, { source: payload.source });
+-
+-    return fetch(endpoint, {
+-      method: "POST",
+-      mode: "no-cors",
+-      cache: "no-store",
+-      headers: { "Content-Type": "text/plain;charset=utf-8" },
++    logEvent('submission_started', payload.traceId, { source: payload.source });
++    return windowRef.fetch(endpoint, {
++      method: 'POST',
++      mode: 'no-cors',
++      cache: 'no-store',
++      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+       body: JSON.stringify(payload)
+-    }).then(function () {
+-      logEvent("post_dispatched", payload.traceId);
++    }).then(() => {
++      logEvent('post_dispatched', payload.traceId);
+       return pollForRecordedRow(endpoint, payload.traceId, VERIFY_ATTEMPTS);
+     });
+   }
+ 
+-  form.addEventListener("submit", function (event) {
++  const submitHandler = event => {
+     event.preventDefault();
+ 
+-    var emailField = form.querySelector('input[name="email"]');
+-    var button = form.querySelector('button[type="submit"]');
+-    var endpoint = getEndpoint();
+-    var email = emailField ? emailField.value.trim() : "";
+-    var traceId = createTraceId();
++    const emailField = form.querySelector('input[name="email"]');
++    const button = form.querySelector('button[type="submit"]');
++    const endpoint = getEndpoint();
++    const email = emailField ? emailField.value.trim() : '';
++    const traceId = createTraceId();
+ 
+     if (!emailField || !emailField.checkValidity()) {
+       if (emailField) emailField.reportValidity();
+-      setStatus("Please enter a valid email address.", "error");
++      setStatus(copy('errors.waitlist.invalidEmail'), 'error');
+       return;
+     }
+ 
+     if (!endpointIsConfigured(endpoint)) {
+-      setStatus("The waitlist is almost ready. Please check back shortly.", "error");
++      setStatus(copy('errors.waitlist.unavailable'), 'error');
+       return;
+     }
+ 
+     if (button) button.disabled = true;
+-    setStatus("Adding you to the early access list… This may take 10-15 seconds.");
++    setStatus(copy('notifications.waitlist.submitting'));
+ 
+     submitWaitlist(endpoint, buildPayload(email, traceId))
+-      .then(function (verification) {
++      .then(verification => {
+         if (!verification || !verification.recorded) {
+-          logEvent("verification_failed", traceId, { reason: "row_not_confirmed" });
+-          setStatus(
+-            "I couldn’t confirm that Google recorded your signup. Please try again. Reference: " + traceId,
+-            "error"
+-          );
++          logEvent('verification_failed', traceId, { reason: 'row_not_confirmed' });
++          setStatus(copy('errors.waitlist.verificationFailed', { traceId }), 'error');
+           return;
+         }
+ 
+         form.reset();
+-        logEvent("submission_confirmed", traceId, { row: verification.row || null });
+-        setStatus("You’re on the list. I’ll send a note when founding access opens.", "success");
++        logEvent('submission_confirmed', traceId, { row: verification.row || null });
++        setStatus(copy('notifications.waitlist.success'), 'success');
+       })
+-      .catch(function (error) {
+-        logEvent("submission_failed", traceId, {
+-          detail: error && error.message ? error.message : String(error || "Unknown error")
++      .catch(error => {
++        logEvent('submission_failed', traceId, {
++          detail: error && error.message ? error.message : String(error || 'Unknown error')
+         });
+-        setStatus(
+-          "Google did not confirm the signup. Please try again. Reference: " + traceId,
+-          "error"
+-        );
++        setStatus(copy('errors.waitlist.submissionFailed', { traceId }), 'error');
+       })
+-      .finally(function () {
++      .finally(() => {
+         if (button) button.disabled = false;
+       });
+-  });
+-})();
++  };
++
++  form.addEventListener('submit', submitHandler);
++  return () => {
++    form.removeEventListener('submit', submitHandler);
++    delete form.dataset.waitlistBound;
++  };
++}
+diff --git a/www/config.generated.json b/www/config.generated.json
+index 7125854..932db1a 100644
+--- a/www/config.generated.json
++++ b/www/config.generated.json
+@@ -9,11 +9,13 @@
+   "LOCAL_DOMAIN": "localtest.me",
+   "MANAGED_BY": "compose",
+   "OWNER_ALIAS": "etalsolutions",
++  "PM_CONFIG_STRICT": "true",
++  "PM_EDGE_TUNNEL_HOSTNAME": "nudge-coming-soon.etal.solutions",
+   "PM_SERVE_EXCLUDE_ADDTL_DIRS": "portmason",
+   "PROJECT_ID": "reviewnudge-coming--1777712786",
+   "RUNTIME_ADAPTER_CODE": "bash-local",
+   "STACK": "reviewnudge-coming-soon-dev",
+-  "TRAEFIK_ENTRYPOINT": "websecurwe",
++  "TRAEFIK_ENTRYPOINT": "websecure",
+   "TRAEFIK_NETWORK": "proxy",
+   "TRAEFIK_TLS": "true",
+   "URI_SCHEME": "https",
+diff --git a/www/index.html b/www/index.html
+index 759c394..cd7ba8a 100644
+--- a/www/index.html
++++ b/www/index.html
+@@ -4,8 +4,8 @@
+   <meta charset="utf-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1" />
+   <meta name="theme-color" content="#d7dee1" />
+-  <meta name="description" content="ReviewNudge is getting ready to help service businesses turn a job well done into an honest review with one thoughtful nudge and an optional follow-up." />
+-  <title>ReviewNudge · Coming Soon</title>
++  <meta name="description" content="" data-copy="public.meta.description" data-copy-attr="content" />
++  <title data-copy="public.meta.title"></title>
+   <style>
+     :root {
+       color-scheme: light;
+@@ -188,6 +188,7 @@
+     .button-compact { min-height: 40px; padding: 10px 14px; }
+     .shell { width: min(1240px, calc(100% - 28px)); margin: 0 auto; padding: 11px 0 64px; }
+     .coming-soon-grid {
++      position: relative;
+       display: grid;
+       grid-template-columns: minmax(0, 1.08fr) minmax(390px, 0.92fr);
+       gap: clamp(30px, 5vw, 74px);
+@@ -195,6 +196,12 @@
+       min-height: calc(100vh - 106px);
+       padding: clamp(11px, 2.33vw, 29px) clamp(4px, 3vw, 34px) 54px;
+     }
++    .pm-viewport-alias {
++      position: absolute;
++      inset: 0;
++      display: block;
++      pointer-events: none;
++    }
+     .hero-copy { position: relative; z-index: 1; }
+     .eyebrow, .section-kicker, .workflow-step {
+       color: var(--brand-highlight);
+@@ -433,12 +440,12 @@
+   </style>
+   <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
+ </head>
+-<body>
+-  <a class="skip-link" href="#mainContent">Skip to the good stuff</a>
++<body aria-busy="true">
++  <a class="skip-link" href="#top" data-copy="public.accessibility.skip"></a>
+   <div class="app-frame">
+     <header class="topbar" data-pm-sticky-header="">
+-      <a aria-label="ReviewNudge home" class="product-lockup" href="#mainContent">
+-        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="ReviewNudge mark">
++      <a class="product-lockup" href="#top" data-copy="public.brand.homeLabel" data-copy-attr="aria-label">
++        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" data-copy="public.brand.markLabel" data-copy-attr="aria-label">
+           <defs>
+             <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.48" stop-color="#d7e0e6"/><stop offset="1" stop-color="#9aa8b2"/></linearGradient>
+             <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1687ff"/><stop offset="1" stop-color="#075fc4"/></linearGradient>
+@@ -450,117 +457,109 @@
+           <path d="M70 20.5l1.7 3.4 3.8.6-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" fill="#fff8e6"/>
+         </svg>
+         <span class="product-identity">
+-          <strong>ReviewNudge<span aria-hidden="true">™</span></strong>
+-          <small>Built on Portmason<span aria-hidden="true">™</span></small>
++          <strong data-copy="public.brand.product"></strong>
++          <small data-copy="public.brand.platform"></small>
+         </span>
+       </a>
+-      <nav aria-label="Primary navigation" class="public-nav">
+-        <a href="#preview">Preview</a>
+-        <a href="#updates">Updates</a>
+-        <a href="#early-access">Early access</a>
++      <nav class="public-nav" data-copy="public.accessibility.primaryNavigation" data-copy-attr="aria-label">
++        <a href="#preview" data-copy="public.nav.preview"></a>
++        <a href="#updates" data-copy="public.nav.updates"></a>
++        <a href="#early-access" data-copy="public.nav.earlyAccess"></a>
+       </nav>
+       <div class="topbar-actions">
+-        <a class="button button-quiet" href="mailto:hello@reviewnudge.local">Contact</a>
+-        <a class="button button-primary button-compact" href="#early-access">Join waitlist</a>
++        <a class="button button-quiet" href="mailto:hello@reviewnudge.local" data-copy="public.nav.contact"></a>
++        <a class="button button-primary button-compact" href="#early-access" data-copy="public.nav.join"></a>
+       </div>
+     </header>
+ 
+-    <main class="shell pm-viewport-target" id="mainContent" data-pm-viewport-target>
+-      <section class="coming-soon-grid pm-viewport-target" aria-labelledby="pageTitle" data-pm-viewport-target>
++    <main class="shell" id="mainContent">
++      <section class="coming-soon-grid pm-viewport-target" id="top" aria-labelledby="pageTitle" data-pm-viewport-target>
++        <span class="pm-viewport-alias" id="early-access" aria-hidden="true" data-pm-viewport-target></span>
+         <div class="hero-copy">
+-          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span>Coming soon for service businesses</p>
+-          <h1 id="pageTitle">A thoughtful nudge for more honest reviews.</h1>
+-          <p class="lede">ReviewNudge is getting ready to help local service teams ask at the right moment, follow up gently, and keep review requests organized without turning good customer relationships into awkward chores.</p>
++          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span><span data-copy="public.hero.eyebrow"></span></p>
++          <h1 id="pageTitle" data-copy="public.hero.title"></h1>
++          <p class="lede" data-copy="public.hero.body"></p>
+           <div class="hero-actions">
+-            <a class="button button-primary" href="#early-access">Request early access</a>
+-            <a class="button button-secondary" href="#preview">See what’s coming</a>
++            <a class="button button-primary" href="#early-access" data-copy="public.hero.primary"></a>
++            <a class="button button-secondary" href="#preview" data-copy="public.hero.secondary"></a>
+           </div>
+-          <p class="offer-line"><strong>Founding access is opening soon.</strong><br />One clean workspace for customer nudges, review links, follow-ups, and status visibility.</p>
+-          <div aria-label="Made for service businesses" class="service-fit">
+-            <span>Home services</span>
+-            <span>Local professionals</span>
+-            <span>Small teams</span>
++          <p class="offer-line"><strong data-copy="public.hero.offerStrong"></strong><br /><span data-copy="public.hero.offerBody"></span></p>
++          <div class="service-fit" data-copy="public.accessibility.serviceFit" data-copy-attr="aria-label">
++            <span data-copy="public.hero.fit1"></span>
++            <span data-copy="public.hero.fit2"></span>
++            <span data-copy="public.hero.fit3"></span>
+           </div>
+         </div>
+ 
+-        <section class="launch-card" id="early-access" aria-labelledby="earlyAccessTitle" data-pm-viewport-target>
++        <section class="launch-card" aria-labelledby="earlyAccessTitle">
+           <div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
+-          <p class="section-kicker">Early access list</p>
+-          <h2 id="earlyAccessTitle">Be first in line.</h2>
+-          <p>Leave your email and I’ll let you know when ReviewNudge is ready for founding customers.</p>
++          <p class="section-kicker" data-copy="public.earlyAccess.kicker"></p>
++          <h2 id="earlyAccessTitle" data-copy="public.earlyAccess.title"></h2>
++          <p data-copy="public.earlyAccess.body"></p>
+           <form class="waitlist-form" data-waitlist-form novalidate>
+-            <label for="email">Email address</label>
++            <label for="email" data-copy="public.earlyAccess.emailLabel"></label>
+             <div class="field-row">
+-              <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required />
+-              <button type="submit">Notify me</button>
++              <input id="email" name="email" type="email" placeholder="" autocomplete="email" required data-copy="public.earlyAccess.emailPlaceholder" data-copy-attr="placeholder" />
++              <button type="submit" data-copy="public.earlyAccess.submit"></button>
+             </div>
+           </form>
+           <p class="form-status" data-waitlist-status role="status" aria-live="polite"></p>
+-          <p class="offer-line">No spam. No noisy launch sequence. Just a heads-up when the doors open.</p>
+-          <footer aria-label="Product assurances" class="launch-meta">
+-            <span><i aria-hidden="true" class="assurance-mark">✓</i>No card for early access</span>
+-            <span><i aria-hidden="true" class="assurance-mark">✓</i>Built for practical workflows</span>
++          <p class="offer-line" data-copy="public.earlyAccess.privacy"></p>
++          <footer class="launch-meta" data-copy="public.accessibility.productAssurances" data-copy-attr="aria-label">
++            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.earlyAccess.assurance1"></span></span>
++            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.earlyAccess.assurance2"></span></span>
+           </footer>
+         </section>
+       </section>
+ 
+-      <section class="below-grid pm-viewport-target" id="updates" aria-label="What is coming" data-pm-viewport-target>
++      <section class="below-grid pm-viewport-target" id="updates" data-pm-viewport-target data-copy="public.updates.label" data-copy-attr="aria-label">
+         <article class="mini-card">
+-          <span class="workflow-step">01</span>
+-          <strong>Ask while the work is fresh</strong>
+-          <p>Send a review request right after a job is complete, while the customer still remembers the good experience.</p>
++          <span class="workflow-step" data-copy="public.updates.step1Number"></span>
++          <strong data-copy="public.updates.step1Title"></strong>
++          <p data-copy="public.updates.step1Body"></p>
+         </article>
+         <article class="mini-card">
+-          <span class="workflow-step">02</span>
+-          <strong>Follow up without pestering</strong>
+-          <p>Keep reminders gentle, visible, and organized so nobody has to rely on memory or sticky notes.</p>
++          <span class="workflow-step" data-copy="public.updates.step2Number"></span>
++          <strong data-copy="public.updates.step2Title"></strong>
++          <p data-copy="public.updates.step2Body"></p>
+         </article>
+         <article class="mini-card">
+-          <span class="workflow-step">03</span>
+-          <strong>Know what happened</strong>
+-          <p>Track who is ready, who was nudged, who needs a reminder, and who already left feedback.</p>
++          <span class="workflow-step" data-copy="public.updates.step3Number"></span>
++          <strong data-copy="public.updates.step3Title"></strong>
++          <p data-copy="public.updates.step3Body"></p>
+         </article>
+       </section>
+ 
+       <section class="preview-frame pm-viewport-target" id="preview" aria-labelledby="previewTitle" data-pm-viewport-target>
+-          <div class="preview-copy">
+-            <p class="section-kicker">Product preview</p>
+-            <h2 id="previewTitle">The workflow stays simple on purpose.</h2>
+-            <p>ReviewNudge is designed around the small operational moments that get missed: completed jobs, happy customers, pending asks, and the follow-up that should feel human instead of automated sludge.</p>
+-            <div class="hero-actions">
+-              <a class="button button-secondary" href="#early-access">Join the waitlist</a>
+-            </div>
++        <div class="preview-copy">
++          <p class="section-kicker" data-copy="public.preview.kicker"></p>
++          <h2 id="previewTitle" data-copy="public.preview.title"></h2>
++          <p data-copy="public.preview.body"></p>
++          <div class="hero-actions">
++            <a class="button button-secondary" href="#early-access" data-copy="public.preview.cta"></a>
+           </div>
++        </div>
+ 
+-          <div class="preview-window" aria-label="ReviewNudge dashboard preview mockup">
+-            <div class="preview-toolbar"><span><i aria-hidden="true"></i>Today’s nudges</span><span class="preview-status">3 ready</span></div>
+-            <div class="preview-metrics">
+-              <article><small>Requests queued</small><strong>18</strong></article>
+-              <article><small>Follow-ups due</small><strong>4</strong></article>
+-              <article><small>Reviews captured</small><strong>12</strong></article>
+-            </div>
+-            <div class="preview-list">
+-              <article><span class="avatar">AC</span><div><strong>Acme Plumbing</strong><small>Kitchen repair completed yesterday</small></div><span class="status-pill ready">Ready</span></article>
+-              <article><span class="avatar">JM</span><div><strong>Jordan M.</strong><small>First nudge sent this morning</small></div><span class="status-pill sent">Sent</span></article>
+-              <article><span class="avatar">SL</span><div><strong>Sunlit HVAC</strong><small>Review link clicked</small></div><span class="status-pill reviewed">Reviewed</span></article>
+-            </div>
+-            <div class="preview-nudge"><span class="review-spark">★</span><div><strong>Gentle reminder prepared</strong><small>Friendly, short, and tied to the service visit.</small></div></div>
++        <div class="preview-window" data-copy="public.accessibility.previewMockup" data-copy-attr="aria-label">
++          <div class="preview-toolbar"><span><i aria-hidden="true"></i><span data-copy="public.preview.toolbar"></span></span><span class="preview-status" data-copy="public.preview.readyCount"></span></div>
++          <div class="preview-metrics">
++            <article><small data-copy="public.preview.metric1Label"></small><strong data-copy="public.preview.metric1Value"></strong></article>
++            <article><small data-copy="public.preview.metric2Label"></small><strong data-copy="public.preview.metric2Value"></strong></article>
++            <article><small data-copy="public.preview.metric3Label"></small><strong data-copy="public.preview.metric3Value"></strong></article>
+           </div>
++          <div class="preview-list">
++            <article><span class="avatar" data-copy="public.preview.sample1Initials"></span><div><strong data-copy="public.preview.sample1Name"></strong><small data-copy="public.preview.sample1Detail"></small></div><span class="status-pill ready" data-copy="public.preview.sample1Status"></span></article>
++            <article><span class="avatar" data-copy="public.preview.sample2Initials"></span><div><strong data-copy="public.preview.sample2Name"></strong><small data-copy="public.preview.sample2Detail"></small></div><span class="status-pill sent" data-copy="public.preview.sample2Status"></span></article>
++            <article><span class="avatar" data-copy="public.preview.sample3Initials"></span><div><strong data-copy="public.preview.sample3Name"></strong><small data-copy="public.preview.sample3Detail"></small></div><span class="status-pill reviewed" data-copy="public.preview.sample3Status"></span></article>
++          </div>
++          <div class="preview-nudge"><span class="review-spark">★</span><div><strong data-copy="public.preview.reminderTitle"></strong><small data-copy="public.preview.reminderBody"></small></div></div>
++        </div>
+       </section>
+ 
+-      <footer class="site-footer">
+-        ReviewNudge™ is preparing for launch. Add your email to the waitlist or check back here in a day or so.
+-      </footer>
++      <footer class="site-footer" data-copy="public.footer.launch"></footer>
+     </main>
+   </div>
+   <script src="./assets/waitlist-config.js"></script>
+-  <script src="./assets/waitlist.js"></script>
+-  <script type="module">
+-    import { bindViewportNavigation } from "./assets/pm-viewport-navigation.js";
+-
+-    bindViewportNavigation(document, {
+-      headerSelector: "[data-pm-sticky-header]"
+-    });
+-  </script>
++  <script type="module" src="./assets/site.js"></script>
+ </body>
+ </html>

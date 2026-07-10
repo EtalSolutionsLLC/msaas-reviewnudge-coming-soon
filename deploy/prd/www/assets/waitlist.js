@@ -1,90 +1,83 @@
-(function () {
-  "use strict";
+import { copy } from './content.js';
 
-  var form = document.querySelector("[data-waitlist-form]");
-  var status = document.querySelector("[data-waitlist-status]");
+export function bindWaitlist(root = globalThis.document, windowRef = globalThis.window) {
+  const form = root?.querySelector?.('[data-waitlist-form]');
+  const status = root?.querySelector?.('[data-waitlist-status]');
 
-  if (!form || !status) return;
+  if (!form || !status || !windowRef || form.dataset.waitlistBound === 'true') {
+    return () => {};
+  }
 
-  var VERIFY_ATTEMPTS = 10;
-  var VERIFY_DELAY_MS = 1500;
-  var JSONP_TIMEOUT_MS = 10000;
+  form.dataset.waitlistBound = 'true';
+
+  const JSONP_TIMEOUT_MS = 20000;
 
   function setStatus(message, state) {
-    status.textContent = message || "";
-    if (state) {
-      status.setAttribute("data-state", state);
-    } else {
-      status.removeAttribute("data-state");
-    }
+    status.textContent = message || '';
+    if (state) status.setAttribute('data-state', state);
+    else status.removeAttribute('data-state');
   }
 
   function logEvent(eventName, traceId, details) {
-    var payload = Object.assign(
-      {
-        service: "reviewnudge-waitlist",
-        event: eventName,
-        traceId: traceId || "",
-        timestamp: new Date().toISOString()
-      },
-      details || {}
-    );
+    const payload = Object.assign({
+      service: 'reviewnudge-waitlist',
+      event: eventName,
+      traceId: traceId || '',
+      timestamp: new Date().toISOString()
+    }, details || {});
 
-    if (eventName.indexOf("failed") >= 0 || eventName.indexOf("error") >= 0) {
-      window.console.error("[ReviewNudge waitlist]", payload);
+    if (eventName.includes('failed') || eventName.includes('error')) {
+      windowRef.console.error('[ReviewNudge waitlist]', payload);
     } else {
-      window.console.info("[ReviewNudge waitlist]", payload);
+      windowRef.console.info('[ReviewNudge waitlist]', payload);
     }
   }
 
   function getEndpoint() {
-    return String(window.REVIEWNUDGE_WAITLIST_ENDPOINT || "").trim();
+    return String(windowRef.REVIEWNUDGE_WAITLIST_ENDPOINT || '').trim();
   }
 
   function endpointIsConfigured(endpoint) {
-    return Boolean(endpoint) && endpoint.indexOf("REPLACE_WITH_DEPLOYMENT_ID") === -1;
+    return Boolean(endpoint) && !endpoint.includes('REPLACE_WITH_DEPLOYMENT_ID');
   }
 
   function createTraceId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
+    if (windowRef.crypto && typeof windowRef.crypto.randomUUID === 'function') {
+      return windowRef.crypto.randomUUID();
     }
-
-    return "rn-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14);
+    return `rn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
   }
 
   function buildPayload(email, traceId) {
     return {
-      email: email,
-      traceId: traceId,
-      source: "reviewnudge-coming-soon",
-      page: window.location.href,
-      referrer: document.referrer || "",
-      userAgent: window.navigator.userAgent || "",
+      action: 'subscribe',
+      email,
+      traceId,
+      source: 'reviewnudge-coming-soon',
+      page: String(windowRef.location.href || '').slice(0, 1000),
+      referrer: String(root.referrer || '').slice(0, 1000),
+      userAgent: String(windowRef.navigator.userAgent || '').slice(0, 1000),
       submittedAt: new Date().toISOString()
     };
   }
 
   function appendQuery(endpoint, params) {
-    var separator = endpoint.indexOf("?") >= 0 ? "&" : "?";
+    const separator = endpoint.includes('?') ? '&' : '?';
     return endpoint + separator + new URLSearchParams(params).toString();
   }
 
-  function requestStatus(endpoint, traceId) {
-    return new Promise(function (resolve, reject) {
-      var callbackName = "__reviewNudgeWaitlistStatus_" + traceId.replace(/[^A-Za-z0-9_$]/g, "").slice(0, 16) + "_" + Date.now();
-      var script = document.createElement("script");
-      var timeoutId;
-      var finished = false;
+  function submitWaitlist(endpoint, payload) {
+    return new Promise((resolve, reject) => {
+      const callbackName = `__reviewNudgeWaitlist_${payload.traceId.replace(/[^A-Za-z0-9_$]/g, '').slice(0, 16)}_${Date.now()}`;
+      const script = root.createElement('script');
+      let timeoutId;
+      let finished = false;
 
       function cleanup() {
-        if (timeoutId) window.clearTimeout(timeoutId);
+        if (timeoutId) windowRef.clearTimeout(timeoutId);
         if (script.parentNode) script.parentNode.removeChild(script);
-        try {
-          delete window[callbackName];
-        } catch (error) {
-          window[callbackName] = undefined;
-        }
+        try { delete windowRef[callbackName]; }
+        catch { windowRef[callbackName] = undefined; }
       }
 
       function finish(handler, value) {
@@ -94,126 +87,80 @@
         handler(value);
       }
 
-      window[callbackName] = function (response) {
-        finish(resolve, response || {});
-      };
-
+      windowRef[callbackName] = response => finish(resolve, response || {});
       script.async = true;
-      script.src = appendQuery(endpoint, {
-        action: "status",
-        traceId: traceId,
+      script.src = appendQuery(endpoint, Object.assign({}, payload, {
         callback: callbackName,
         _: String(Date.now())
-      });
-      script.onerror = function () {
-        finish(reject, new Error("The waitlist verification endpoint could not be reached."));
-      };
+      }));
+      script.onerror = () => finish(reject, new Error(copy('errors.waitlist.submissionFailed')));
+      timeoutId = windowRef.setTimeout(
+        () => finish(reject, new Error(copy('errors.waitlist.verificationTimeout'))),
+        JSONP_TIMEOUT_MS
+      );
 
-      timeoutId = window.setTimeout(function () {
-        finish(reject, new Error("The waitlist verification request timed out."));
-      }, JSONP_TIMEOUT_MS);
-
-      document.head.appendChild(script);
+      logEvent('submission_started', payload.traceId, { source: payload.source });
+      root.head.appendChild(script);
     });
   }
 
-  function delay(milliseconds) {
-    return new Promise(function (resolve) {
-      window.setTimeout(resolve, milliseconds);
-    });
-  }
-
-  function pollForRecordedRow(endpoint, traceId, attemptsRemaining) {
-    return requestStatus(endpoint, traceId).then(function (response) {
-      logEvent("verification_response", traceId, {
-        state: response.state || "unknown",
-        recorded: Boolean(response.recorded),
-        row: response.row || null
-      });
-
-      if (response.recorded) {
-        return response;
-      }
-
-      if (response.ok === false && response.state && response.state !== "pending") {
-        var detail = response.error || response.detail || response.state;
-        throw new Error(detail);
-      }
-
-      if (attemptsRemaining <= 1) {
-        return null;
-      }
-
-      return delay(VERIFY_DELAY_MS).then(function () {
-        return pollForRecordedRow(endpoint, traceId, attemptsRemaining - 1);
-      });
-    });
-  }
-
-  function submitWaitlist(endpoint, payload) {
-    logEvent("submission_started", payload.traceId, { source: payload.source });
-
-    return fetch(endpoint, {
-      method: "POST",
-      mode: "no-cors",
-      cache: "no-store",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload)
-    }).then(function () {
-      logEvent("post_dispatched", payload.traceId);
-      return pollForRecordedRow(endpoint, payload.traceId, VERIFY_ATTEMPTS);
-    });
-  }
-
-  form.addEventListener("submit", function (event) {
+  const submitHandler = event => {
     event.preventDefault();
 
-    var emailField = form.querySelector('input[name="email"]');
-    var button = form.querySelector('button[type="submit"]');
-    var endpoint = getEndpoint();
-    var email = emailField ? emailField.value.trim() : "";
-    var traceId = createTraceId();
+    const emailField = form.querySelector('input[name="email"]');
+    const button = form.querySelector('button[type="submit"]');
+    const endpoint = getEndpoint();
+    const email = emailField ? emailField.value.trim() : '';
+    const traceId = createTraceId();
 
     if (!emailField || !emailField.checkValidity()) {
       if (emailField) emailField.reportValidity();
-      setStatus("Please enter a valid email address.", "error");
+      setStatus(copy('errors.waitlist.invalidEmail'), 'error');
       return;
     }
 
     if (!endpointIsConfigured(endpoint)) {
-      setStatus("The waitlist is almost ready. Please check back shortly.", "error");
+      setStatus(copy('errors.waitlist.unavailable'), 'error');
       return;
     }
 
     if (button) button.disabled = true;
-    setStatus("Adding you to the early access list… This may take 10-15 seconds.");
+    setStatus(copy('notifications.waitlist.submitting'));
 
     submitWaitlist(endpoint, buildPayload(email, traceId))
-      .then(function (verification) {
-        if (!verification || !verification.recorded) {
-          logEvent("verification_failed", traceId, { reason: "row_not_confirmed" });
-          setStatus(
-            "I couldn’t confirm that Google recorded your signup. Please try again. Reference: " + traceId,
-            "error"
-          );
-          return;
+      .then(result => {
+        if (!result || result.ok !== true || result.recorded !== true) {
+          const detail = result && (result.error || result.detail || result.state);
+          throw new Error(detail || 'The waitlist registration was not confirmed.');
         }
 
         form.reset();
-        logEvent("submission_confirmed", traceId, { row: verification.row || null });
-        setStatus("You’re on the list. I’ll send a note when founding access opens.", "success");
-      })
-      .catch(function (error) {
-        logEvent("submission_failed", traceId, {
-          detail: error && error.message ? error.message : String(error || "Unknown error")
+        logEvent('submission_confirmed', traceId, {
+          row: result.row || null,
+          duplicate: Boolean(result.duplicate),
+          state: result.state || 'row_recorded'
         });
-        setStatus(
-          "Google did not confirm the signup. Please try again. Reference: " + traceId,
-          "error"
-        );
+
+        const messageKey = result.state === 'email_already_registered'
+          ? 'notifications.waitlist.alreadyRegistered'
+          : 'notifications.waitlist.success';
+        const successFallback = copy('notifications.waitlist.success');
+        setStatus(copy(messageKey, {}, successFallback), 'success');
       })
-      .finally(function () {
+      .catch(error => {
+        logEvent('submission_failed', traceId, {
+          detail: error && error.message ? error.message : String(error || 'Unknown error')
+        });
+        setStatus(copy('errors.waitlist.submissionFailed', { traceId }), 'error');
+      })
+      .finally(() => {
         if (button) button.disabled = false;
       });
-  });
-})();
+  };
+
+  form.addEventListener('submit', submitHandler);
+  return () => {
+    form.removeEventListener('submit', submitHandler);
+    delete form.dataset.waitlistBound;
+  };
+}

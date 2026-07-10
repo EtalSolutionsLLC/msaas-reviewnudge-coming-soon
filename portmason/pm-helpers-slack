@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_slack_validate_config() {
+    [[ "${PM_SUPPORT_CHANNEL_PROVIDER:-slack}" == slack ]] \
+        || die "pm-helpers-slack loaded for the wrong provider" 2
+}

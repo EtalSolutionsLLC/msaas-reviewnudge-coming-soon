@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_cloudflared() {
+    if ! declare -F pm_cloudflared_validate_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-cloudflared"
+    fi
+    pm_cloudflared_validate_config
+    local scopes='pm-edge-tunnel,cloudflared'
+    pm_config_register PM_EDGE_TUNNEL_TOKEN secret "$scopes" TUNNEL_TOKEN required
+    pm_config_register PM_EDGE_TUNNEL_LOG_LEVEL var "$scopes" TUNNEL_LOGLEVEL optional
+    pm_config_register PM_EDGE_TUNNEL_LOG_FILE var "$scopes" TUNNEL_LOGFILE optional
+    pm_config_register PM_EDGE_TUNNEL_NO_AUTOUPDATE var "$scopes" NO_AUTOUPDATE optional
+}

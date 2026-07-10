@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm008() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local record line_no
+
+    pm_lint_is_compose_file "$path" || return 0
+
+    if ! grep -Eq '^name:[[:space:]]*"?\$\{STACK([}:]|$)' "$file"; then
+        pm_lint_report PM008 "$path" 1 \
+            "Compose file does not declare top-level name: \${STACK}" \
+            "Use STACK as the Compose project identity and let Compose derive resource names."
+    fi
+
+    while IFS= read -r record; do
+        [[ -n "$record" ]] || continue
+        line_no="${record%%:*}"
+        pm_lint_report PM008 "$path" "$line_no" \
+            "container_name bypasses canonical STACK-based Compose naming" \
+            "Remove container_name and rely on top-level name: \${STACK}."
+    done < <(grep -nE '^[[:space:]]*container_name[[:space:]]*:' "$file" || true)
+}
+
+pm_lint_register_rule PM008 ERROR file \
+    "Compose identity and naming" \
+    "TGF Environment Identity; EPC A2.1; Portmason Compose convention" \
+    pm_lint_rule_pm008
