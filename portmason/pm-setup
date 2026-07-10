@@ -261,12 +261,15 @@ main() {
     case "${PM_DEPLOY_SYNC_FORCE:-}" in
         1|true|TRUE|yes|YES|on|ON) deploy_sync_force=1 ;;
     esac
-    case "${REFRESH_FROM_ROOT:-}" in
-        1|true|TRUE|yes|YES|on|ON) deploy_sync_force=1 ;;
-    esac
-    case "${FORCE_DEPLOY_SYNC:-}" in
-        1|true|TRUE|yes|YES|on|ON) deploy_sync_force=1 ;;
-    esac
+
+    local setup_arg
+    for setup_arg in "$@"; do
+        case "$setup_arg" in
+            --refresh-from-root|--force-deploy-sync)
+                deploy_sync_force=1
+                ;;
+        esac
+    done
 
     log INFO "workflow start" \
         "project_root=$PROJECT_ROOT" "script_dir=$SCRIPT_DIR" \
