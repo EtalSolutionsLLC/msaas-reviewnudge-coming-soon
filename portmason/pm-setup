@@ -258,11 +258,11 @@ main() {
     local database_enabled=0
     local -a sync_args=(--prepare)
 
-    case "${PM_DEPLOY_SYNC_FORCE:-}" in
-        1|true|TRUE|yes|YES|on|ON) deploy_sync_force=1 ;;
-    esac
-    [[ ${REFRESH_FROM_ROOT:-0} == 1 || ${FORCE_DEPLOY_SYNC:-0} == 1 ]] \
-        && deploy_sync_force=1
+    if is_true "${PM_DEPLOY_SYNC_FORCE:-}" \
+        || is_true "${REFRESH_FROM_ROOT:-}" \
+        || is_true "${FORCE_DEPLOY_SYNC:-}"; then
+        deploy_sync_force=1
+    fi
 
     log INFO "workflow start" \
         "project_root=$PROJECT_ROOT" "script_dir=$SCRIPT_DIR" \
