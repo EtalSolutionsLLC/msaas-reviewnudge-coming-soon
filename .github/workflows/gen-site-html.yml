@@ -277,21 +277,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "${DEPLOY_ROOT}"
-
-          docker compose \
-            -f docker-compose.yml \
-            run --rm \
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}/site/${SITE_ROOT}:/workspace/www" \
             --volume "${PORTMASON_SHARE}:/workspace/portmason:ro" \
-            -e SITE_DIR=/workspace/www \
-            -e GITHUB_ACTIONS=true \
-            -e PM_OFFICIAL_BUILD=true \
-            -e PM_DEFER_SITE_BUILD_FINALIZE=true \
-            -e PM_SOURCE_COMMIT="${PM_SOURCE_COMMIT}" \
-            -e PM_SOURCE_DIRTY=false \
-            -e PM_DEPLOY_ENV="${DEPLOY_ENV}" \
-            -e PM_DEPLOYMENT_ID="${PM_DEPLOYMENT_ID}" \
-            toolbox \
+            --env SITE_DIR=/workspace/www \
+            --env PORTMASON_SHARE=/workspace/portmason \
+            --env GITHUB_ACTIONS=true \
+            --env PM_OFFICIAL_BUILD=true \
+            --env PM_DEFER_SITE_BUILD_FINALIZE=true \
+            --env PM_SOURCE_COMMIT="${PM_SOURCE_COMMIT}" \
+            --env PM_SOURCE_DIRTY=false \
+            --env PM_DEPLOY_ENV="${DEPLOY_ENV}" \
+            --env PM_DEPLOYMENT_ID="${PM_DEPLOYMENT_ID}" \
+            python:3.12-alpine \
             sh -lc 'exec python3 "$PORTMASON_SHARE/pm-process-site-partials"'
 
           PM_OFFICIAL_BUILD=true \
