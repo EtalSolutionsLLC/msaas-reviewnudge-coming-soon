@@ -176,14 +176,14 @@ ensure_env_file() {
 
     local runtime_adapter_effective="${RUNTIME_ADAPTER_CODE:--}"
     : "${RUNTIME_CODE:=${runtime_adapter_effective%%-*}}"
-    : "${ADAPTER_CODE:=${runtime_adapter_effective##*-}}"
+    : "${ADAPTER_CODE:=${runtime_adapter_effective#*-}}"
 
     env_init_set ADAPTER_CODE         "${ADAPTER_CODE:-}"
     env_init_set RUNTIME_CODE         "${RUNTIME_CODE:-}"
 
     local db_platform_provider_effective="${DB_PROVIDER_PLATFORM_CODE:--}"
-    : "${DB_PLATFORM_CODE:=${db_platform_provider_effective%%-*}}"
-    : "${DB_PROVIDER_CODE:=${db_platform_provider_effective##*-}}"
+    : "${DB_PROVIDER_CODE:=${db_platform_provider_effective%%-*}}"
+    : "${DB_PLATFORM_CODE:=${db_platform_provider_effective#*-}}"
 
     env_init_set DB_PROVIDER_CODE         "${DB_PROVIDER_CODE:-}"
     env_init_set DB_PLATFORM_CODE         "${DB_PLATFORM_CODE:-}"
@@ -907,7 +907,7 @@ live_tail_stop() {
 
 load_db_platform_helper() {
   local db_provider_platform_effective="${DB_PROVIDER_PLATFORM_CODE:--}"
-  : "${DB_PLATFORM_CODE:=${db_provider_platform_effective##*-}}"
+  : "${DB_PLATFORM_CODE:=${db_provider_platform_effective#*-}}"
   local file="${PORTMASON_SHARE}/pm-helpers-${DB_PLATFORM_CODE}"
   [[ -f "$file" ]] || return 0
   # shellcheck disable=SC1090
@@ -916,7 +916,7 @@ load_db_platform_helper() {
 
 load_db_provider_helper() {
   local db_provider_platform_effective="${DB_PROVIDER_PLATFORM_CODE:--}"
-  : "${DB_PROVIDER_CODE:=${db_provider_platform_effective##*-}}"
+  : "${DB_PROVIDER_CODE:=${db_provider_platform_effective%%-*}}"
   local file="${PORTMASON_SHARE}/pm-helpers-${DB_PROVIDER_CODE}"
   [[ -f "$file" ]] || return 0
   # shellcheck disable=SC1090
@@ -925,8 +925,8 @@ load_db_provider_helper() {
 
 load_db_bridge_provider_platform() {
   local db_provider_platform_effective="${DB_PROVIDER_PLATFORM_CODE:--}"
-  : "${DB_PLATFORM_CODE:=${db_provider_platform_effective##*-}}"
-  : "${DB_PROVIDER_CODE:=${db_provider_platform_effective##*-}}"
+  : "${DB_PLATFORM_CODE:=${db_provider_platform_effective#*-}}"
+  : "${DB_PROVIDER_CODE:=${db_provider_platform_effective%%-*}}"
   local file="${PORTMASON_SHARE}/pm-db-bridge-${DB_PROVIDER_CODE}-${DB_PLATFORM_CODE}"
   [[ -f "$file" ]] || return 0
   # shellcheck disable=SC1090
@@ -1950,6 +1950,9 @@ sys_bootstrap() {
     env_init_set RUNTIME_CODE         "${RUNTIME_CODE:=}"
     env_init_set BACK_END_CODE        "${BACK_END_CODE:=}"
     env_init_set FRONT_END_CODE       "${FRONT_END_CODE:=}"
+    env_init_set DB_PROVIDER_PLATFORM_CODE  "${DB_PROVIDER_PLATFORM_CODE:=}"
+    env_init_set DB_PROVIDER_CODE           "${DB_PROVIDER_CODE:=}"
+    env_init_set DB_PLATFORM_CODE           "${DB_PLATFORM_CODE:=}"
     env_init_set TRAEFIK_DIR          "${TRAEFIK_DIR:=}"
 
 

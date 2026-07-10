@@ -8,7 +8,7 @@ Local quick preview:
 pm-serve-bash www/index.html
 ```
 
-Container preview is handled by Portmason/Compose conventions:
+Container preview, rendering, configuration, and deployment preparation run through Portmason:
 
 ```bash
 pm-setup
@@ -28,7 +28,7 @@ node --test tests/*.test.mjs
 
 ## Waitlist setup
 
-The static page posts waitlist signups to a Google Apps Script Web App.
+The static page sends waitlist signups to a Google Apps Script Web App.
 
 1. Create a Google Sheet for waitlist entries.
 2. Create an Apps Script project and paste `apps-script/Code.gs`.
@@ -47,20 +47,42 @@ GitHub Pages remains static. Apps Script is the small server-side bridge that wr
 
 Every browser submission receives a unique `trace_id`.
 
-The Apps Script endpoint:
+The browser sends one JSONP request using `action=subscribe`. The Apps Script endpoint validates, deduplicates, writes, verifies, and returns the final result in that same response.
 
+Before reporting success, Apps Script:
+
+- acquires a script lock so concurrent requests cannot race each other;
+- rejects an existing trace ID without creating another row;
+- rejects an existing normalized email address without creating another row;
 - writes the trace ID into the `Waitlist` row;
+- calls `SpreadsheetApp.flush()`;
+- reads the saved row back and verifies the email and trace ID;
 - records request, validation, write, verification, duplicate, and exception events in `WaitlistAudit`;
-- hashes the email before putting it in logs or the audit sheet;
-- calls `SpreadsheetApp.flush()` and reads the saved row back before reporting success;
-- exposes a status lookup through `doGet?action=status&traceId=...`.
+- hashes the email before putting it in logs or the audit sheet.
 
-Because the static page submits with `mode=no-cors`, it cannot trust the POST completion alone. It polls the status endpoint through JSONP and only displays success after the matching spreadsheet row is confirmed. Failed confirmations display the trace ID so the browser console, Apps Script execution log, `WaitlistAudit`, and `Waitlist` row can be correlated.
+The browser displays success only when the JSONP response contains both `ok: true` and `recorded: true`. The older POST and `action=status` interfaces remain available for compatibility and independent diagnostics, but the public page does not depend on them.
+
+## Production workflow
+
+The GitHub Pages workflow:
+
+- reads the pinned commit from `.portmason-tooling-ref`;
+- checks out `ops-and-sops/ops/portmason` at that exact revision;
+- registers the shared Portmason directory in `PATH`;
+- enters `deploy/${DEPLOY_ENV}`;
+- runs `pm-setup` as the authoritative orchestration entrypoint;
+- uses `pm-version` to finalize and verify the generated artifact.
+
+The workflow must not call internal Portmason implementation utilities directly. Runtime-specific rendering and deployment behavior remain owned by `pm-setup` and its selected modules.
 
 ## Slack support boundary
 
 The public coming-soon site must not contain a Slack webhook or a general Slack integration. Slack is reserved for authenticated ReviewNudge customers contacting the Et al Solutions support team. The customer support relay belongs in the main ReviewNudge application, where tenant identity and authorization are available.
 
-## Build 082 viewport landing adjustment
+## Build 096 QA contract alignment
 
-Coming-soon section landing continues to use the centralized Portmason `pm-viewport-navigation.js` contract. This build does not add page-specific scrolling or centering logic. It reduces the existing page and hero top padding to approximately one-third of the prior values so centered targets sit higher and tall targets reveal more content.
+Build 096 aligns the regression tests and documentation with the deployed one-request JSONP waitlist implementation. It also adds a release gate proving that GitHub Pages generation delegates to `pm-setup` rather than invoking an internal Portmason renderer directly.
+
+## Build 097 mobile launch emphasis
+
+Build 097 makes the launch state unmistakable in the shared content catalog and moves the early-access form above the hero copy on screens up to 640px wide. Desktop and tablet retain the existing two-column and single-column reading order. All rendering and deployment preparation continue to run through `pm-setup`.

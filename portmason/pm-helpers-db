@@ -597,6 +597,27 @@ pm_runtime_validate_selector() {
     fi
 }
 
+pm_compose_preflight_required() {
+    case "${PM_COMPOSE_PREFLIGHT:-auto}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        0|false|FALSE|no|NO|off|OFF)
+            return 1
+            ;;
+        auto|"")
+            ;;
+        *)
+            pm_preflight_warning "compose.policy" "PM_COMPOSE_PREFLIGHT" \
+                "unrecognized value '${PM_COMPOSE_PREFLIGHT}'; using automatic detection"
+            ;;
+    esac
+
+    # Docker Compose is an implementation concern of the local adapter.
+    # Static GitHub Pages and other non-local adapters must not require Docker.
+    [[ "${ADAPTER_CODE:-}" == "local" ]]
+}
+
 pm_db_preflight() {
     pm_preflight_reset
     log INFO "pm-preflight: starting aggregate configuration validation"
@@ -610,7 +631,18 @@ pm_db_preflight() {
     if declare -F pm_config_manager_bootstrap_local_env_files >/dev/null 2>&1; then
         pm_config_manager_bootstrap_local_env_files
     fi
-    pm_compose_load_model || true
+    if pm_compose_preflight_required; then
+        pm_compose_load_model || true
+    else
+        PM_COMPOSE_MODEL_JSON='{"services":{}}'
+        PROJECT_SERVICES='[]'
+        export PM_COMPOSE_MODEL_JSON PROJECT_SERVICES
+
+        log INFO "pm-preflight: Compose inspection skipped" \
+            "runtime=${RUNTIME_CODE:-<unset>}" \
+            "adapter=${ADAPTER_CODE:-<unset>}" \
+            "reason=active adapter does not require Compose"
+    fi
 
     if declare -F pm_config_manager_prepare >/dev/null 2>&1; then
         pm_config_manager_prepare preflight

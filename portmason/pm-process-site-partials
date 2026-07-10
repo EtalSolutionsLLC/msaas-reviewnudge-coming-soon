@@ -59,8 +59,8 @@ def main() -> int:
     rendered, count = BLOCK_RE.subn(replace_block, source)
 
     if count == 0:
-        print(f"ERROR: no PM partial blocks found in {INDEX_FILE}", file=sys.stderr)
-        return 1
+        print(f"No PM partial blocks found in {INDEX_FILE}; nothing to process")
+        return 0
 
     INDEX_FILE.write_text(rendered, encoding="utf-8")
     os.chmod(INDEX_FILE, 0o644)

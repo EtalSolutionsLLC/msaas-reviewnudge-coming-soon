@@ -1,12 +1,8 @@
-# ReviewNudge Coming Soon Build 082 — cumulative Google audit + viewport landing adjustment
-project/apps-script/Code.gs
-project/www/assets/waitlist.js
+# ReviewNudge Coming Soon Build 097 — mobile form priority and explicit launch copy
 project/www/index.html
+project/www/content/en-US/public.json
 project/tests/waitlist-static.test.mjs
-project/tests/viewport-targeting.test.mjs
+project/tests/workflow-portmason.test.mjs
+project/tests/coming-soon-layout.test.mjs
 project/README.md
-project/deploy/prd/apps-script/Code.gs
-project/deploy/prd/www/assets/waitlist.js
-project/deploy/prd/www/index.html
-project/deploy/prd/README.md
 project/chg.txt

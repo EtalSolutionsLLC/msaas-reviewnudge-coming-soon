@@ -13,7 +13,16 @@ pm_config_apply_github() {
 
     local sync="${PM_GITHUB_SYNC_ACTIONS_CONFIG:-}"
     if [[ -z "$sync" ]]; then
-        [[ "${DEPLOY_ENV:-dev}" == dev ]] && sync=false || sync=true
+        # Repository variable and secret synchronization is an administrative
+        # operation. A deployment workflow consumes configuration; it must not
+        # attempt to rewrite its own GitHub Actions configuration.
+        if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+            sync=false
+        elif [[ "${DEPLOY_ENV:-dev}" == "dev" ]]; then
+            sync=false
+        else
+            sync=false
+        fi
     fi
     case "${sync,,}" in
         1|true|yes|on) pm_github_sync_actions_config ;;

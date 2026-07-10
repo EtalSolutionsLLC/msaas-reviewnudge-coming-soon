@@ -426,12 +426,16 @@ pm_config_validate_registry() {
     local key type scopes target required owner
     declare -A targets=()
     for key in "${PM_CONFIG_KEYS[@]}"; do
-        type="${PM_CONFIG_TYPE[$key]}"
-        scopes="${PM_CONFIG_SCOPES[$key]}"
-        target="${PM_CONFIG_TARGET[$key]}"
-        required="${PM_CONFIG_REQUIRED[$key]}"
-        owner="${PM_CONFIG_OWNER[$key]}"
-        [[ -n "$owner" ]] || die "pm-config: missing owner for $key" 2
+        type="${PM_CONFIG_TYPE[$key]-}"
+        scopes="${PM_CONFIG_SCOPES[$key]-}"
+        target="${PM_CONFIG_TARGET[$key]-}"
+        required="${PM_CONFIG_REQUIRED[$key]-}"
+        owner="${PM_CONFIG_OWNER[$key]-}"
+
+        [[ -n "$type" ]]             || die "pm-config: registry key is missing type metadata: key=$key" 2
+        [[ -n "$target" ]]             || die "pm-config: registry key is missing target metadata: key=$key" 2
+        [[ -n "$required" ]]             || die "pm-config: registry key is missing required metadata: key=$key" 2
+        [[ -n "$owner" ]]             || die "pm-config: registry key is missing owner metadata: key=$key" 2
         [[ "$type" == control-plane || -n "$scopes" ]] \
             || die "pm-config: runtime key has no scopes: $key" 2
         [[ "$required" == required || "$required" == optional ]] \
@@ -447,15 +451,14 @@ pm_config_validate_required_services() {
     while IFS=$'\t' read -r service role _image _has_build; do
         [[ -n "$service" ]] || continue
         while IFS= read -r key; do
-            [[ "${PM_CONFIG_REQUIRED[$key]}" == required ]] || continue
+            [[ "${PM_CONFIG_REQUIRED[$key]-}" == required ]] || continue
             pm_config_value value "$key"
             if [[ -z "$value" ]] && ! pm_config_secret_override_exists "$key"; then
                 if declare -F pm_preflight_error >/dev/null 2>&1; then
                     pm_preflight_error "config.required" "$key" \
-                        "required by service=$service owner=${PM_CONFIG_OWNER[$key]}"
-                else
+                        "required by service=$service owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"                else
                     log ERROR "pm-config: required value missing" \
-                        "key=$key" "service=$service" "owner=${PM_CONFIG_OWNER[$key]}"
+                        "key=$key" "service=$service" "owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"
                 fi
                 missing=1
             fi

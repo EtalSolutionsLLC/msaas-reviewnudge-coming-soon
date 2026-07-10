@@ -72,6 +72,33 @@ fi
 # pm-helpers normally loads this during bootstrap; source idempotently for direct tests.
 . "${PORTMASON_SHARE}/pm-helpers-db"
 
+pm_setup_report_error() {
+    local rc="${1:-$?}"
+    local command="${2:-${BASH_COMMAND:-<unknown>}}"
+    local source_file="${3:-${BASH_SOURCE[1]:-${BASH_SOURCE[0]:-pm-setup}}}"
+    local source_line="${4:-${BASH_LINENO[0]:-${LINENO:-0}}}"
+    local function_name="${5:-${FUNCNAME[1]:-main}}"
+
+    trap - ERR
+
+    if declare -F log >/dev/null 2>&1; then
+        log ERROR "unhandled command failure" \
+            "rc=${rc}" \
+            "source=${source_file}" \
+            "line=${source_line}" \
+            "function=${function_name}" \
+            "command=${command}"
+    else
+        printf 'ERROR: pm-setup failure rc=%s source=%s line=%s function=%s command=%s\n' \
+            "$rc" "$source_file" "$source_line" "$function_name" "$command" >&2
+    fi
+
+    exit "$rc"
+}
+
+set -E
+trap 'pm_setup_report_error "$?" "$BASH_COMMAND" "${BASH_SOURCE[0]:-pm-setup}" "${LINENO:-0}" "${FUNCNAME[0]:-main}"' ERR
+
 is_deploy_snapshot_dir() {
     [[ "$SCRIPT_DIR" == "$PROJECT_ROOT"/deploy/* ]] \
         && [[ "$(dirname -- "$SCRIPT_DIR")" == "$PROJECT_ROOT/deploy" ]]

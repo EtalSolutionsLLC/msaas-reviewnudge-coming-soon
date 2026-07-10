@@ -1,21 +1,95 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+pm_lint_env_value() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local file="${3:?file required}"
+    local record value=""
+
+    record="$(
+        grep -E "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" |
+        tail -n1 || true
+    )"
+
+    if [[ -n "$record" ]]; then
+        value="${record#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+
+        case "$value" in
+            \"*\")
+                value="${value#\"}"
+                value="${value%\"}"
+                ;;
+            \'*\')
+                value="${value#\'}"
+                value="${value%\'}"
+                ;;
+        esac
+    fi
+
+    printf -v "$out_var" '%s' "$value"
+}
+
 pm_lint_rule_pm006() {
     local path="${1:?path required}"
     local file="${2:?file required}"
-    local key record line_no
+    local key record line_no configured=""
+    local composite="" derived_provider="" derived_platform=""
+    local configured_provider="" configured_platform=""
     local -a keys=(RUNTIME_CODE ADAPTER_CODE DB_PROVIDER_CODE DB_PLATFORM_CODE)
 
     pm_lint_is_operator_env_file "$path" || return 0
+
+    pm_lint_env_value composite DB_PROVIDER_PLATFORM_CODE "$file"
+    pm_lint_env_value configured_provider DB_PROVIDER_CODE "$file"
+    pm_lint_env_value configured_platform DB_PLATFORM_CODE "$file"
+
+    if [[ "$composite" == *-* ]]; then
+        derived_provider="${composite%%-*}"
+        derived_platform="${composite#*-}"
+    fi
+
     for key in "${keys[@]}"; do
-        record="$(grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" | head -n1 || true)"
+        record="$(
+            grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" |
+            head -n1 || true
+        )"
         [[ -n "$record" ]] || continue
+
         line_no="${record%%:*}"
-        pm_lint_report PM006 "$path" "$line_no" \
-            "$key is derived and must not be authored as an independent source of truth" \
-            "Set RUNTIME_ADAPTER_CODE or DB_PROVIDER_PLATFORM_CODE; derive component selectors at the lifecycle phase that uses them."
+        pm_lint_env_value configured "$key" "$file"
+
+        case "$key" in
+            DB_PROVIDER_CODE)
+                pm_lint_report PM006 "$path" "$line_no" \
+                    "DB selector conflict: DB_PROVIDER_CODE configured='$configured_provider'; DB_PROVIDER_PLATFORM_CODE='$composite' derives provider='$derived_provider' and platform='$derived_platform'" \
+                    "Remove DB_PROVIDER_CODE. Set only DB_PROVIDER_PLATFORM_CODE=<provider>-<platform>."
+                ;;
+            DB_PLATFORM_CODE)
+                pm_lint_report PM006 "$path" "$line_no" \
+                    "DB selector conflict: DB_PLATFORM_CODE configured='$configured_platform'; DB_PROVIDER_PLATFORM_CODE='$composite' derives provider='$derived_provider' and platform='$derived_platform'" \
+                    "Remove DB_PLATFORM_CODE. Set only DB_PROVIDER_PLATFORM_CODE=<provider>-<platform>."
+                ;;
+            *)
+                pm_lint_report PM006 "$path" "$line_no" \
+                    "$key configured='$configured' is derived and must not be authored as an independent source of truth" \
+                    "Set RUNTIME_ADAPTER_CODE or DB_PROVIDER_PLATFORM_CODE; derive component selectors at the lifecycle phase that uses them."
+                ;;
+        esac
     done
+
+    if [[ -n "$composite" && "$composite" != *-* ]]; then
+        record="$(
+            grep -nE '^[[:space:]]*(export[[:space:]]+)?DB_PROVIDER_PLATFORM_CODE[[:space:]]*=' "$file" |
+            head -n1 || true
+        )"
+        line_no="${record%%:*}"
+        pm_lint_report PM006 "$path" "${line_no:-1}" \
+            "DB_PROVIDER_PLATFORM_CODE configured='$composite' cannot derive both DB_PROVIDER_CODE and DB_PLATFORM_CODE" \
+            "Use DB_PROVIDER_PLATFORM_CODE=<provider>-<platform>, for example postgres-local."
+    fi
 }
 
 pm_lint_register_rule PM006 ERROR file \

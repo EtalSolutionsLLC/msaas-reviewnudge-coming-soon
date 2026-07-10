@@ -172,11 +172,9 @@ pm_provision_db_platform() {
         || die "pm-provision-local database entrypoint requires DB_PLATFORM_CODE=local" 2
 
     pm_compose_load_model
-
     local service
     service="$(pm_compose_service_for_role db)"
-    [[ -n "$service" ]] \
-        || die "pm-provision-local: no Compose db service was found" 2
+    [[ -n "$service" ]] || die "pm-provision-local: no Compose db service was found" 2
 
     env_init_set PM_DB_SERVICE "$service"
     env_init_set DB_HOST "${DB_HOST:-$service}"
@@ -184,46 +182,8 @@ pm_provision_db_platform() {
     env_init_set DB_ADMIN_USER "${DB_ADMIN_USER:-${DB_USER:-}}"
     env_init_set DB_ADMIN_PASSWORD "${DB_ADMIN_PASSWORD:-${DB_PASSWORD:-}}"
 
-    log INFO "pm-provision-local: starting database service" \
-        "service=$service"
-
-    "${PM_COMPOSE_CMD[@]}" up -d "$service"
-
-    local attempt
-    local max_attempts="${PM_DB_READY_ATTEMPTS:-30}"
-    local wait_seconds="${PM_DB_READY_INTERVAL_SECONDS:-1}"
-
-    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-        if "${PM_COMPOSE_CMD[@]}" exec -T "$service" \
-            pg_isready \
-                --host localhost \
-                --port "$DB_PORT" \
-                --username "$DB_ADMIN_USER" \
-                >/dev/null 2>&1; then
-            log INFO "pm-provision-local: database service ready" \
-                "service=$service" \
-                "attempt=$attempt"
-            break
-        fi
-
-        if (( attempt == max_attempts )); then
-            log ERROR "pm-provision-local: database service readiness failed" \
-                "service=$service" \
-                "attempts=$max_attempts"
-
-            "${PM_COMPOSE_CMD[@]}" ps "$service" >&2 || true
-            "${PM_COMPOSE_CMD[@]}" logs --tail 100 "$service" >&2 || true
-
-            die "pm-provision-local: database service did not become ready: $service" 2
-        fi
-
-        sleep "$wait_seconds"
-    done
-
     log INFO "pm-provision-local: database platform contract ready" \
-        "service=$service" \
-        "host=$DB_HOST" \
-        "port=$DB_PORT"
+        "service=$service" "host=$DB_HOST" "port=$DB_PORT"
 }
 
 main() {
