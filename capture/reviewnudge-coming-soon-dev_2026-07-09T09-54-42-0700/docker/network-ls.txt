@@ -1,7 +1,0 @@
-NETWORK ID     NAME                                  DRIVER    SCOPE
-2072517e5f5e   bridge                                bridge    local
-b67fff2f0ad1   host                                  host      local
-dbff41de7b6d   none                                  null      local
-03dc635f8570   proxy                                 bridge    local
-8400603a3117   reviewnudge-coming-soon-dev_default   bridge    local
-7fba9e82ccc1   traefik-dev-tunnel                    bridge    local

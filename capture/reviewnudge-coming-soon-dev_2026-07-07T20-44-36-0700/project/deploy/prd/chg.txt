@@ -1,7 +1,0 @@
-project/www/index.html
-project/www/assets/waitlist.js
-project/www/assets/waitlist-config.js
-project/apps-script/Code.gs
-project/tests/waitlist-static.test.mjs
-project/README.md
-project/chg.txt

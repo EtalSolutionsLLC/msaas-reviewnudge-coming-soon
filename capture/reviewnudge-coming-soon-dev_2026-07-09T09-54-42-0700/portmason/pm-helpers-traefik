@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-pm_traefik_validate_config() {
-    case "${PM_TRAEFIK_LOG_LEVEL:-INFO}" in
-        TRACE|DEBUG|INFO|WARN|ERROR|FATAL|PANIC|trace|debug|info|warn|error|fatal|panic) ;;
-        *) die "Invalid PM_TRAEFIK_LOG_LEVEL: ${PM_TRAEFIK_LOG_LEVEL}" 2 ;;
-    esac
-}

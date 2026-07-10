@@ -1,6 +1,0 @@
-CONTAINER ID   IMAGE                            COMMAND                  CREATED        STATUS                      PORTS                                                                          NAMES
-ef85dc431e53   nginx:1.27-alpine                "/docker-entrypoint.…"   12 hours ago   Up 12 hours                 80/tcp                                                                         reviewnudge-coming-soon-dev-web-1
-d5945a8fbca1   ghcr.io/traefik/traefik:v3.7.5   "/entrypoint.sh --co…"   13 hours ago   Up 13 hours                 0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp   traefik-dev-traefik-1
-f66a4721a7e0   traefik/whoami:v1.10             "/whoami"                13 hours ago   Up 13 hours                 80/tcp                                                                         traefik-dev-whoami-1
-b827d18c596a   local/cloudflared:latest         "cloudflared tunnel …"   2 days ago     Up 13 hours                                                                                                traefik-dev-cloudflared-1
-e898bdbc0e2a   nginx:1.27-alpine                "/docker-entrypoint.…"   11 days ago    Exited (127) 28 hours ago                                                                                  www-dev-web-1

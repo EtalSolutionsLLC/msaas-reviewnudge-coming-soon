@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -u
-set -o pipefail || true
-
-# Restart Traefik project and current project
-docker compose -f ~/code/traefik/docker-compose.yml restart
-docker compose restart
