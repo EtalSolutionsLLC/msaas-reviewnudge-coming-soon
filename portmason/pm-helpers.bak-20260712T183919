@@ -428,8 +428,6 @@ persist_public_host_identity() {
     [[ -v APP_BASE_URL ]] && pm_upsert_env_file_value APP_BASE_URL "$APP_BASE_URL" "$target"
     [[ -v SITE_URL ]] && pm_upsert_env_file_value SITE_URL "$SITE_URL" "$target"
     [[ -v WP_SITE_URL ]] && pm_upsert_env_file_value WP_SITE_URL "$WP_SITE_URL" "$target"
-    # Optional host identities must not determine function success.
-    return 0
 }
 
 

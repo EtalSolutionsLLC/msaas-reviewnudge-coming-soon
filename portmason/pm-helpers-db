@@ -46,7 +46,7 @@ pm_config_manager_prepare_base_registry
 
 
 declare -gA PM_DEPRECATED_SECRET_ALIASES=(
-    [NEON_API_KEY]=DB_API_KEY
+#    [NEON_API_KEY]=DB_API_KEY
 )
 
 PM_PUBLIC_KEY_LIKE_KEYS=(

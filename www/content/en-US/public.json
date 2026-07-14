@@ -1,14 +1,14 @@
 {
   "meta": {
-    "title": "ReviewNudge · Coming Soon",
-    "description": "ReviewNudge is coming soon—a simpler way for service businesses to turn a job well done into an honest review with one thoughtful nudge and an optional follow-up."
+    "title": "ReviewNudge launches July 15",
+    "description": "ReviewNudge launches July 15. A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace."
   },
   "accessibility": {
-    "skip": "Skip to the good stuff",
+    "skip": "Skip to main content",
     "primaryNavigation": "Primary navigation",
-    "serviceFit": "Made for service businesses",
-    "productAssurances": "Product assurances",
-    "previewMockup": "ReviewNudge dashboard preview mockup"
+    "serviceFit": "Key ReviewNudge benefits",
+    "productAssurances": "Launch assurances",
+    "previewMockup": "ReviewNudge product preview mockup"
   },
   "brand": {
     "homeLabel": "ReviewNudge home",
@@ -19,74 +19,74 @@
   "nav": {
     "preview": "Preview",
     "updates": "What's coming",
-    "earlyAccess": "Coming soon",
+    "launchDate": "Launch date",
     "contact": "Contact",
-    "join": "Join launch list"
+    "join": "July 15"
   },
   "hero": {
-    "eyebrow": "ReviewNudge is coming soon",
-    "title": "ReviewNudge is coming soon.",
-    "body": "A thoughtful nudge for more honest reviews. We’re building a simpler way for local service teams to ask at the right moment, follow up gently, and keep every review request organized.",
-    "primary": "Join the launch list",
-    "secondary": "Preview what’s coming",
-    "offerStrong": "Founding access opens soon.",
-    "offerBody": "One clean workspace for customer nudges, review links, follow-ups, and status visibility.",
-    "fit1": "Home services",
-    "fit2": "Local professionals",
-    "fit3": "Small teams"
+    "eyebrow": "ReviewNudge launches July 15",
+    "title": "ReviewNudge launches July 15.",
+    "body": "A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace.",
+    "primary": "Preview what's coming",
+    "secondary": "Launching July 15",
+    "offerStrong": "One clear place for customer review activity.",
+    "offerBody": "Review links, follow-ups, customer status, and team visibility without turning review management into a marketing-platform project.",
+    "fit1": "Three-click setup",
+    "fit2": "Follow-up tracking",
+    "fit3": "Customer workspace"
   },
-  "earlyAccess": {
-    "kicker": "Coming soon",
-    "title": "Join the launch list.",
-    "body": "ReviewNudge is not open yet. Leave your email and we’ll let you know as soon as founding access begins.",
-    "emailLabel": "Email for launch updates",
-    "emailPlaceholder": "you@example.com",
-    "submit": "Join launch list",
-    "privacy": "No spam. Just a clear heads-up when ReviewNudge opens.",
-    "assurance1": "No card required to join",
-    "assurance2": "Be first to hear when access opens"
+  "launch": {
+    "kicker": "Launch date",
+    "title": "July 15, 2026",
+    "body": "ReviewNudge will be available beginning July 15. Come back on launch day to start organizing review requests in one clean workspace.",
+    "messageTitle": "What happens on July 15?",
+    "messageItem1": "ReviewNudge opens for launch access.",
+    "messageItem2": "Local service teams can start organizing review requests and follow-ups.",
+    "messageItem3": "The coming-soon page gives way to the live product entry point.",
+    "assurance1": "Built for local service teams",
+    "assurance2": "One organized review workspace"
   },
   "updates": {
-    "label": "What we're building",
+    "label": "What's coming",
     "step1Number": "01",
-    "step1Title": "Ask while the work is fresh",
-    "step1Body": "Send a review request right after a job is complete, while the customer still remembers the good experience.",
+    "step1Title": "Ask",
+    "step1Body": "Send review requests from a clean workspace when the customer experience is still fresh.",
     "step2Number": "02",
-    "step2Title": "Follow up without pestering",
-    "step2Body": "Keep reminders gentle, visible, and organized so nobody has to rely on memory or sticky notes.",
+    "step2Title": "Track",
+    "step2Body": "See which customers have been contacted, which requests need attention, and what follow-up is next.",
     "step3Number": "03",
-    "step3Title": "Know what happened",
-    "step3Body": "Track who is ready, who was nudged, who needs a reminder, and who already left feedback."
+    "step3Title": "Grow",
+    "step3Body": "Build a more consistent review process without adding complexity to the day."
   },
   "preview": {
     "kicker": "Product preview",
-    "title": "The workflow stays simple on purpose.",
-    "body": "ReviewNudge is designed around the small operational moments that get missed: completed jobs, happy customers, pending asks, and the follow-up that should feel human instead of automated sludge.",
-    "cta": "Join the waitlist",
-    "toolbar": "Today’s nudges",
+    "title": "A cleaner way to manage review requests.",
+    "body": "ReviewNudge is built around one simple workspace for review links, customer status, follow-ups, and team visibility.",
+    "cta": "Launching July 15",
+    "toolbar": "Review workspace",
     "readyCount": "3 ready",
-    "metric1Label": "Requests queued",
-    "metric1Value": "18",
-    "metric2Label": "Follow-ups due",
-    "metric2Value": "4",
-    "metric3Label": "Reviews captured",
-    "metric3Value": "12",
-    "sample1Initials": "AC",
-    "sample1Name": "Acme Plumbing",
-    "sample1Detail": "Kitchen repair completed yesterday",
+    "metric1Label": "Requests",
+    "metric1Value": "24",
+    "metric2Label": "Follow-ups",
+    "metric2Value": "8",
+    "metric3Label": "Reviews",
+    "metric3Value": "11",
+    "sample1Initials": "HS",
+    "sample1Name": "Home service customer",
+    "sample1Detail": "Ready for review request",
     "sample1Status": "Ready",
-    "sample2Initials": "JM",
-    "sample2Name": "Jordan M.",
-    "sample2Detail": "First nudge sent this morning",
+    "sample2Initials": "LP",
+    "sample2Name": "Local professional client",
+    "sample2Detail": "Follow-up scheduled",
     "sample2Status": "Sent",
-    "sample3Initials": "SL",
-    "sample3Name": "Sunlit HVAC",
-    "sample3Detail": "Review link clicked",
+    "sample3Initials": "ST",
+    "sample3Name": "Small team customer",
+    "sample3Detail": "Review completed",
     "sample3Status": "Reviewed",
-    "reminderTitle": "Gentle reminder prepared",
-    "reminderBody": "Friendly, short, and tied to the service visit."
+    "reminderTitle": "Next nudge ready",
+    "reminderBody": "Keep the follow-up moving without losing track."
   },
   "footer": {
-    "launch": "ReviewNudge™ is coming soon. Join the launch list to hear when founding access opens."
+    "launch": "© 2026 Et al Solutions LLC. ReviewNudge™ and Portmason™ are marks of Et al Solutions LLC."
   }
 }

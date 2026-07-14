@@ -1,12 +1,13 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#d7dee1" />
-  <meta name="description" content="" data-copy="public.meta.description" data-copy-attr="content" />
-  <title data-copy="public.meta.title">ReviewNudge launches July 15</title>
-  <style>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<meta content="#d7dee1" name="theme-color"/>
+<meta content="ReviewNudge launches July 15. A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace." name="description"/>
+<title>ReviewNudge launches July 15</title>
+<style>
     :root {
       color-scheme: light;
       --brand-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -254,7 +255,6 @@
       border-radius: var(--brand-radius-panel);
       box-shadow: var(--brand-shadow);
       padding: clamp(26px, 4vw, 42px);
-      scroll-margin-top: var(--pm-header-h, 0px);
     }
     .launch-rail {
       position: absolute;
@@ -273,18 +273,29 @@
       letter-spacing: -0.035em;
     }
     .launch-card p { color: var(--brand-text-soft); line-height: 1.65; }
-    input:focus, button:focus-visible, a:focus-visible { outline: 3px solid var(--brand-accent-soft); outline-offset: 2px; }
-    .launch-message {
-      margin: 22px 0 20px;
-      border: 1px solid var(--brand-border-subtle);
-      border-radius: var(--brand-radius-card);
-      background: var(--brand-surface-subtle);
-      padding: 18px 18px 16px;
-      color: var(--brand-text-soft);
+    label { display: block; margin-bottom: 7px; color: var(--brand-text-soft); font-size: 14px; font-weight: 750; }
+    input {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--brand-border-input);
+      border-radius: var(--brand-radius-control);
+      background: var(--brand-input-background);
+      color: var(--brand-text);
+      padding: 13px 14px;
     }
-    .launch-message p { margin: 0 0 10px; color: var(--brand-text); }
-    .launch-message ul { margin: 0; padding-left: 20px; line-height: 1.6; }
-    .launch-message li + li { margin-top: 4px; }
+    input::placeholder { color: var(--brand-text-muted); opacity: 0.38; }
+    input:focus, button:focus-visible, a:focus-visible { outline: 3px solid var(--brand-accent-soft); outline-offset: 2px; }
+
+    .form-status {
+      min-height: 24px;
+      margin: 6px 0 14px;
+      color: var(--brand-text-muted);
+      font-size: 14px;
+      font-weight: 750;
+      line-height: 1.45;
+    }
+    .form-status[data-state="success"] { color: var(--brand-success); }
+    .form-status[data-state="error"] { color: var(--brand-danger); }
     .launch-meta {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -322,6 +333,8 @@
       margin-top: 10px;
     }
     .pm-viewport-target {
+      min-height: var(--pm-usable-vh, auto);
+      align-content: center;
       scroll-margin-top: var(--pm-header-h, 0px);
     }
     .mini-card {
@@ -418,125 +431,137 @@
       .launch-meta span + span { border-left: 0; border-top: 1px solid var(--brand-border-subtle); }
       h1 { font-size: clamp(42px, 14vw, 64px); }
     }
-  </style>
-  <link rel="shortcut icon" type="image/x-icon" href="favicon.ico" />
+  
+    .launch-message {
+      margin: 22px 0 20px;
+      border: 1px solid var(--brand-border-subtle);
+      border-radius: var(--brand-radius-card);
+      background: var(--brand-surface-subtle);
+      padding: 18px 18px 16px;
+      color: var(--brand-text-soft);
+    }
+    .launch-message p { margin: 0 0 10px; color: var(--brand-text); }
+    .launch-message ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+    .launch-message li + li { margin-top: 4px; }
+</style>
+<link href="favicon.ico" rel="shortcut icon" type="image/x-icon"/>
 </head>
-<body aria-busy="true">
-  <a class="skip-link" href="#top" data-copy="public.accessibility.skip">Skip to main content</a>
-  <div class="app-frame">
-    <header class="topbar" data-pm-sticky-header="">
-      <a class="product-lockup" href="#top" aria-label="ReviewNudge home" data-copy="public.brand.homeLabel" data-copy-attr="aria-label">
-        <svg class="product-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="ReviewNudge mark" data-copy="public.brand.markLabel" data-copy-attr="aria-label">
-          <defs>
-            <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.48" stop-color="#d7e0e6"/><stop offset="1" stop-color="#9aa8b2"/></linearGradient>
-            <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1687ff"/><stop offset="1" stop-color="#075fc4"/></linearGradient>
-          </defs>
-          <rect x="8" y="10" width="72" height="62" rx="20" fill="url(#steel)" stroke="#7f8e99" stroke-width="2"/>
-          <path d="M29 35h30M29 47h22" fill="none" stroke="#24323d" stroke-width="6" stroke-linecap="round"/>
-          <path d="M59 69l14 15 2-19" fill="url(#blue)" stroke="#075fc4" stroke-width="2" stroke-linejoin="round"/>
-          <circle cx="70" cy="26" r="10" fill="#f2b84b"/>
-          <path d="M70 20.5l1.7 3.4 3.8.6-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" fill="#fff8e6"/>
-        </svg>
-        <span class="product-identity">
-          <strong data-copy="public.brand.product">ReviewNudge™</strong>
-          <small data-copy="public.brand.platform">Built on Portmason™</small>
-        </span>
-      </a>
-      <nav class="public-nav" aria-label="Primary navigation" data-copy="public.accessibility.primaryNavigation" data-copy-attr="aria-label">
-        <a href="#preview" data-copy="public.nav.preview">Preview</a>
-        <a href="#updates" data-copy="public.nav.updates">What's coming</a>
-        <a href="#launch-date" data-copy="public.nav.launchDate">Launch date</a>
-      </nav>
-      <div class="topbar-actions">
-        <a class="button button-quiet" href="mailto:hello@reviewnudge.com" data-copy="public.nav.contact">Contact</a>
-        <a class="button button-primary button-compact" href="#launch-date" data-copy="public.nav.join">July 15</a>
-      </div>
-    </header>
+<body>
+<a class="skip-link" href="#top">Skip to main content</a>
+<div class="app-frame">
+<header class="topbar" data-pm-sticky-header="">
+<a aria-label="ReviewNudge home" class="product-lockup" href="#top">
+<svg aria-label="ReviewNudge mark" class="product-mark" role="img" viewbox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<lineargradient id="steel" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#ffffff"></stop><stop offset="0.48" stop-color="#d7e0e6"></stop><stop offset="1" stop-color="#9aa8b2"></stop></lineargradient>
+<lineargradient id="blue" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#1687ff"></stop><stop offset="1" stop-color="#075fc4"></stop></lineargradient>
+</defs>
+<rect fill="url(#steel)" height="62" rx="20" stroke="#7f8e99" stroke-width="2" width="72" x="8" y="10"></rect>
+<path d="M29 35h30M29 47h22" fill="none" stroke="#24323d" stroke-linecap="round" stroke-width="6"></path>
+<path d="M59 69l14 15 2-19" fill="url(#blue)" stroke="#075fc4" stroke-linejoin="round" stroke-width="2"></path>
+<circle cx="70" cy="26" fill="#f2b84b" r="10"></circle>
+<path d="M70 20.5l1.7 3.4 3.8.6-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" fill="#fff8e6"></path>
+</svg>
+<span class="product-identity">
+<strong>ReviewNudge™</strong>
+<small>Built on Portmason™</small>
+</span>
+</a>
+<nav aria-label="Primary navigation" class="public-nav">
+<a href="#preview">Preview</a>
+<a href="#updates">What's coming</a>
+<a href="#launch-date">Launch date</a>
+</nav>
+<div class="topbar-actions">
+<a class="button button-quiet" href="mailto:hello@reviewnudge.com">Contact</a>
+<a class="button button-primary button-compact" href="#launch-date">July 15</a>
+</div>
+</header>
+<main class="shell" id="mainContent">
+<section aria-labelledby="pageTitle" class="coming-soon-grid pm-viewport-target" data-pm-viewport-target="" id="top">
 
-    <main class="shell" id="mainContent">
-      <section class="coming-soon-grid pm-viewport-target" id="top" aria-labelledby="pageTitle" data-pm-viewport-target>
-        <div class="hero-copy">
-          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span><span data-copy="public.hero.eyebrow">ReviewNudge launches July 15</span></p>
-          <h1 id="pageTitle" data-copy="public.hero.title">ReviewNudge launches July 15.</h1>
-          <p class="lede" data-copy="public.hero.body">A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace.</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#preview" data-copy="public.hero.primary">Preview what's coming</a>
-            <a class="button button-secondary" href="#launch-date" data-copy="public.hero.secondary">Launching July 15</a>
-          </div>
-          <p class="offer-line"><strong data-copy="public.hero.offerStrong">One clear place for customer review activity.</strong><br /><span data-copy="public.hero.offerBody">Review links, follow-ups, customer status, and team visibility without turning review management into a marketing-platform project.</span></p>
-          <div class="service-fit" aria-label="Key ReviewNudge benefits" data-copy="public.accessibility.serviceFit" data-copy-attr="aria-label">
-            <span data-copy="public.hero.fit1">Three-click setup</span>
-            <span data-copy="public.hero.fit2">Follow-up tracking</span>
-            <span data-copy="public.hero.fit3">Customer workspace</span>
-          </div>
-        </div>
+<div class="hero-copy">
+<p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span>ReviewNudge launches July 15</p>
+<h1 id="pageTitle">ReviewNudge launches July 15.</h1>
+<p class="lede">A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace.</p>
+<div class="hero-actions">
+<a class="button button-primary" href="#preview">Preview what's coming</a>
+<a class="button button-secondary" href="#launch-date">Launching July 15</a>
+</div>
+<p class="offer-line"><strong>One clear place for customer review activity.</strong><br/>Review links, follow-ups, customer status, and team visibility without turning review management into a marketing-platform project.</p>
+<div aria-label="Key ReviewNudge benefits" class="service-fit"><span>Three-click setup</span>
+<span>Follow-up tracking</span>
+<span>Customer workspace</span>
+</div>
+</div>
+<section aria-labelledby="launchDateTitle" class="launch-card" id="launch-date">
+<div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
+<p class="section-kicker">Launch date</p>
+<h2 id="launchDateTitle">July 15, 2026</h2>
+<p>ReviewNudge will be available beginning July 15. Come back on launch day to start organizing review requests in one clean workspace.</p>
 
-        <section class="launch-card" id="launch-date" aria-labelledby="launchDateTitle">
-          <div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
-          <p class="section-kicker" data-copy="public.launch.kicker">Launch date</p>
-          <h2 id="launchDateTitle" data-copy="public.launch.title">July 15, 2026</h2>
-          <p data-copy="public.launch.body">ReviewNudge will be available beginning July 15. Come back on launch day to start organizing review requests in one clean workspace.</p>
-          <div class="launch-message">
-            <p><strong data-copy="public.launch.messageTitle">What happens on July 15?</strong></p>
-            <ul>
-              <li data-copy="public.launch.messageItem1">ReviewNudge opens for launch access.</li>
-              <li data-copy="public.launch.messageItem2">Local service teams can start organizing review requests and follow-ups.</li>
-              <li data-copy="public.launch.messageItem3">The coming-soon page gives way to the live product entry point.</li>
-            </ul>
-          </div>
-          <footer class="launch-meta" aria-label="Launch assurances" data-copy="public.accessibility.productAssurances" data-copy-attr="aria-label">
-            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance1">Built for local service teams</span></span>
-            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance2">One organized review workspace</span></span>
-          </footer>
-        </section>
-      </section>
+<div class="launch-message">
+<p><strong>What happens on July 15?</strong></p>
+<ul>
+<li>ReviewNudge opens for launch access.</li>
+<li>Local service teams can start organizing review requests and follow-ups.</li>
+<li>The coming-soon page gives way to the live product entry point.</li>
+</ul>
+</div>
 
-      <section class="below-grid pm-viewport-target" id="updates" data-pm-viewport-target aria-label="What's coming" data-copy="public.updates.label" data-copy-attr="aria-label">
-        <article class="mini-card">
-          <span class="workflow-step" data-copy="public.updates.step1Number">01</span>
-          <strong data-copy="public.updates.step1Title">Ask</strong>
-          <p data-copy="public.updates.step1Body">Send review requests from a clean workspace when the customer experience is still fresh.</p>
-        </article>
-        <article class="mini-card">
-          <span class="workflow-step" data-copy="public.updates.step2Number">02</span>
-          <strong data-copy="public.updates.step2Title">Track</strong>
-          <p data-copy="public.updates.step2Body">See which customers have been contacted, which requests need attention, and what follow-up is next.</p>
-        </article>
-        <article class="mini-card">
-          <span class="workflow-step" data-copy="public.updates.step3Number">03</span>
-          <strong data-copy="public.updates.step3Title">Grow</strong>
-          <p data-copy="public.updates.step3Body">Build a more consistent review process without adding complexity to the day.</p>
-        </article>
-      </section>
 
-      <section class="preview-frame pm-viewport-target" id="preview" aria-labelledby="previewTitle" data-pm-viewport-target>
-        <div class="preview-copy">
-          <p class="section-kicker" data-copy="public.preview.kicker">Product preview</p>
-          <h2 id="previewTitle" data-copy="public.preview.title">A cleaner way to manage review requests.</h2>
-          <p data-copy="public.preview.body">ReviewNudge is built around one simple workspace for review links, customer status, follow-ups, and team visibility.</p>
-          <div class="hero-actions">
-            <a class="button button-secondary" href="#launch-date" data-copy="public.preview.cta">Launching July 15</a>
-          </div>
-        </div>
-        <div class="preview-window" aria-label="ReviewNudge product preview mockup" data-copy="public.accessibility.previewMockup" data-copy-attr="aria-label">
-          <div class="preview-toolbar"><span><i aria-hidden="true"></i><span data-copy="public.preview.toolbar">Review workspace</span></span><span class="preview-status" data-copy="public.preview.readyCount">3 ready</span></div>
-          <div class="preview-metrics">
-            <article><small data-copy="public.preview.metric1Label">Requests</small><strong data-copy="public.preview.metric1Value">24</strong></article>
-            <article><small data-copy="public.preview.metric2Label">Follow-ups</small><strong data-copy="public.preview.metric2Value">8</strong></article>
-            <article><small data-copy="public.preview.metric3Label">Reviews</small><strong data-copy="public.preview.metric3Value">11</strong></article>
-          </div>
-          <div class="preview-list">
-            <article><span class="avatar" data-copy="public.preview.sample1Initials">HS</span><div><strong data-copy="public.preview.sample1Name">Home service customer</strong><small data-copy="public.preview.sample1Detail">Ready for review request</small></div><span class="status-pill ready" data-copy="public.preview.sample1Status">Ready</span></article>
-            <article><span class="avatar" data-copy="public.preview.sample2Initials">LP</span><div><strong data-copy="public.preview.sample2Name">Local professional client</strong><small data-copy="public.preview.sample2Detail">Follow-up scheduled</small></div><span class="status-pill sent" data-copy="public.preview.sample2Status">Sent</span></article>
-            <article><span class="avatar" data-copy="public.preview.sample3Initials">ST</span><div><strong data-copy="public.preview.sample3Name">Small team customer</strong><small data-copy="public.preview.sample3Detail">Review completed</small></div><span class="status-pill reviewed" data-copy="public.preview.sample3Status">Reviewed</span></article>
-          </div>
-          <div class="preview-nudge"><span class="review-spark">★</span><div><strong data-copy="public.preview.reminderTitle">Next nudge ready</strong><small data-copy="public.preview.reminderBody">Keep the follow-up moving without losing track.</small></div></div>
-        </div>
-      </section>
 
-      <footer class="site-footer" data-copy="public.footer.launch">© 2026 Et al Solutions LLC. ReviewNudge™ and Portmason™ are marks of Et al Solutions LLC.</footer>
-    </main>
-  </div>
-  <script type="module" src="./assets/site.js"></script>
+<footer aria-label="Launch assurances" class="launch-meta">
+<span><i aria-hidden="true" class="assurance-mark">✓</i><span>Built for local service teams</span></span>
+<span><i aria-hidden="true" class="assurance-mark">✓</i><span>One organized review workspace</span></span>
+</footer>
+</section>
+</section>
+<section aria-label="What's coming" class="below-grid pm-viewport-target" data-pm-viewport-target="" id="updates">
+<article class="mini-card">
+<span class="workflow-step">1</span>
+<strong>Ask</strong>
+<p>Send review requests from a clean workspace when the customer experience is still fresh.</p>
+</article>
+<article class="mini-card">
+<span class="workflow-step">2</span>
+<strong>Track</strong>
+<p>See which customers have been contacted, which requests need attention, and what follow-up is next.</p>
+</article>
+<article class="mini-card">
+<span class="workflow-step">3</span>
+<strong>Grow</strong>
+<p>Build a more consistent review process without adding complexity to the day.</p>
+</article>
+</section>
+<section aria-labelledby="previewTitle" class="preview-frame pm-viewport-target" data-pm-viewport-target="" id="preview">
+<div class="preview-copy">
+<p class="section-kicker">Product preview</p>
+<h2 id="previewTitle">A cleaner way to manage review requests.</h2>
+<p>ReviewNudge is built around one simple workspace for review links, customer status, follow-ups, and team visibility.</p>
+<div class="hero-actions">
+<a class="button button-secondary" href="#launch-date">Launching July 15</a>
+</div>
+</div>
+<div aria-label="ReviewNudge product preview mockup" class="preview-window">
+<div class="preview-toolbar"><span><i aria-hidden="true"></i><span>Review workspace</span></span><span class="preview-status">3 ready</span></div>
+<div class="preview-metrics">
+<article><small>Requests</small><strong>24</strong></article>
+<article><small>Follow-ups</small><strong>8</strong></article>
+<article><small>Reviews</small><strong>11</strong></article>
+</div>
+<div class="preview-list">
+<article><span class="avatar">HS</span><div><strong>Home service customer</strong><small>Ready for review request</small></div><span class="status-pill ready">Ready</span></article>
+<article><span class="avatar">LP</span><div><strong>Local professional client</strong><small>Follow-up scheduled</small></div><span class="status-pill sent">Sent</span></article>
+<article><span class="avatar">ST</span><div><strong>Small team customer</strong><small>Review completed</small></div><span class="status-pill reviewed">Reviewed</span></article>
+</div>
+<div class="preview-nudge"><span class="review-spark">★</span><div><strong>Next nudge ready</strong><small>Keep the follow-up moving without losing track.</small></div></div>
+</div>
+</section>
+<footer class="site-footer">© 2026 Et al Solutions LLC. ReviewNudge™ and Portmason™ are marks of Et al Solutions LLC.</footer>
+</main>
+</div>
+<!--<script src="./assets/waitlist-config.js"></script>-->
+<script src="./assets/site.js" type="module"></script>
 </body>
 </html>

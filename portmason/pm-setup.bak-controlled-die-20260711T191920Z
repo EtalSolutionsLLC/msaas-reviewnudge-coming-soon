@@ -81,12 +81,6 @@ pm_setup_report_error() {
 
     trap - ERR
 
-    # Treat an already-logged die() as controlled termination.
-    # die() has already emitted the authoritative CRITICAL message.
-    if [[ "${source_file##*/}" == "pm-helpers" && "$function_name" == "die" ]]; then
-        exit "$rc"
-    fi
-
     if declare -F log >/dev/null 2>&1; then
         log ERROR "unhandled command failure" \
             "rc=${rc}" \

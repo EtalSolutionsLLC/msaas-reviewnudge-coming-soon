@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+export PORTMASON_SHARE
+
+# shellcheck source=/dev/null
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+site_dir=""
+entry_file=""
+asset_prefix="/assets"
+skip_materialize=false
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  pm-install-web-build-info --site-dir PATH [--entry-file PATH]
+                            [--asset-prefix /assets] [--skip-materialize]
+
+Installs the canonical Portmason Build Identity browser capability, injects its
+stylesheet and module tags into the selected HTML entry file, and materializes
+build-info.json from the standard Portmason version contract.
+USAGE
+}
+
+while (($#)); do
+  case "$1" in
+    --site-dir)
+      (($# >= 2)) || die "--site-dir requires a value" 2
+      site_dir="$2"
+      shift 2
+      ;;
+    --entry-file)
+      (($# >= 2)) || die "--entry-file requires a value" 2
+      entry_file="$2"
+      shift 2
+      ;;
+    --asset-prefix)
+      (($# >= 2)) || die "--asset-prefix requires a value" 2
+      asset_prefix="$2"
+      shift 2
+      ;;
+    --skip-materialize)
+      skip_materialize=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      return 0 2>/dev/null || exit 0
+      ;;
+    *)
+      die "Unknown pm-install-web-build-info argument: $1" 2
+      ;;
+  esac
+done
+
+[[ -n "$site_dir" ]] || die "--site-dir is required" 2
+[[ -d "$site_dir" ]] || die "Site directory does not exist: $site_dir" 2
+site_dir="$(cd -- "$site_dir" && pwd -P)"
+
+if [[ -z "$entry_file" ]]; then
+  if [[ -f "$site_dir/site.template.html" ]]; then
+    entry_file="$site_dir/site.template.html"
+  elif [[ -f "$site_dir/index.html" ]]; then
+    entry_file="$site_dir/index.html"
+  else
+    die "Unable to locate site.template.html or index.html under $site_dir" 2
+  fi
+fi
+[[ "$entry_file" = /* ]] || entry_file="$(pwd -P)/$entry_file"
+[[ -f "$entry_file" ]] || die "HTML entry file does not exist: $entry_file" 2
+
+asset_prefix="/${asset_prefix#/}"
+asset_prefix="${asset_prefix%/}"
+asset_dir="$site_dir/${asset_prefix#/}"
+canonical_js="${PORTMASON_SHARE}/web/pm-build-info.js"
+canonical_css="${PORTMASON_SHARE}/web/pm-build-info.css"
+project_js="${asset_dir}/pm-build-info.js"
+project_css="${asset_dir}/pm-build-info.css"
+
+[[ -r "$canonical_js" ]] || die "Canonical Portmason Build Identity JavaScript is missing: $canonical_js" 2
+[[ -r "$canonical_css" ]] || die "Canonical Portmason Build Identity stylesheet is missing: $canonical_css" 2
+
+install -D -m 0644 "$canonical_js" "$project_js"
+install -D -m 0644 "$canonical_css" "$project_css"
+log INFO "installed Portmason Build Identity assets" \
+  "javascript=$project_js" "stylesheet=$project_css"
+
+python3 - "$entry_file" "$asset_prefix/pm-build-info.css" "$asset_prefix/pm-build-info.js" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+css_href = sys.argv[2]
+js_src = sys.argv[3]
+text = path.read_text(encoding="utf-8")
+
+css_tag = f'<link data-pm-build-info-stylesheet="" href="{css_href}" rel="stylesheet"/>'
+build_meta_tag = '<meta content="/build-info.json" data-pm-build-info-meta="build" name="etal-site-build-info"/>'
+deploy_meta_tag = '<meta content="/deploy-info.json" data-pm-build-info-meta="deploy" name="etal-site-deploy-info"/>'
+js_tag = f'<script data-pm-build-info-script="" src="{js_src}" type="module"></script>'
+
+css_pattern = re.compile(r'<link\b[^>]*data-pm-build-info-stylesheet[^>]*>', re.I)
+js_pattern = re.compile(r'<script\b[^>]*data-pm-build-info-script[^>]*>\s*</script>', re.I)
+build_meta_pattern = re.compile(r'<meta\b[^>]*data-pm-build-info-meta=["\']build["\'][^>]*>', re.I)
+deploy_meta_pattern = re.compile(r'<meta\b[^>]*data-pm-build-info-meta=["\']deploy["\'][^>]*>', re.I)
+
+if css_pattern.search(text):
+    text = css_pattern.sub(css_tag, text, count=1)
+else:
+    match = re.search(r'</head\s*>', text, re.I)
+    if not match:
+        raise SystemExit(f"Build Identity could not find </head> in {path}")
+    text = text[:match.start()] + css_tag + "\n" + text[match.start():]
+
+for pattern, tag in ((build_meta_pattern, build_meta_tag), (deploy_meta_pattern, deploy_meta_tag)):
+    if pattern.search(text):
+        text = pattern.sub(tag, text, count=1)
+    else:
+        match = re.search(r'</head\s*>', text, re.I)
+        if not match:
+            raise SystemExit(f"Build Identity could not find </head> in {path}")
+        text = text[:match.start()] + tag + "\n" + text[match.start():]
+
+if js_pattern.search(text):
+    text = js_pattern.sub(js_tag, text, count=1)
+else:
+    match = re.search(r'</body\s*>', text, re.I)
+    if not match:
+        raise SystemExit(f"Build Identity could not find </body> in {path}")
+    text = text[:match.start()] + js_tag + "\n" + text[match.start():]
+
+path.write_text(text, encoding="utf-8")
+PY
+log INFO "enabled Portmason Build Identity in web entry file" "entry=$entry_file"
+
+materialize_build_identity() (
+  set -euo pipefail
+
+  local version_command=""
+  local version_root=""
+  local version_projection=""
+  local source_commit=""
+  local source_dirty=""
+  local current_json=""
+  local build_info=""
+  local refresh=true
+  local version_file=""
+
+  version_command="$(command -v pm-version || true)"
+  [[ -n "$version_command" ]] || version_command="${PORTMASON_SHARE}/pm-version"
+  [[ -x "$version_command" ]] || die "pm-version is required to materialize Build Identity metadata" 2
+
+  version_root="${PM_VERSION_ROOT:-${PROJECT_ROOT:-}}"
+  if [[ -z "$version_root" ]]; then
+    version_root="$(git -C "$site_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  fi
+  [[ -n "$version_root" ]] || die "Unable to resolve the project version root for Build Identity" 2
+  [[ -d "$version_root" ]] || die "Build Identity version root is not a directory: $version_root" 2
+  version_root="$(cd -- "$version_root" && pwd -P)"
+
+  # Build Identity consumes only the canonical root identity. Deployment snapshot
+  # verification belongs to pm-version validate/deployment workflows and must not
+  # prevent browser metadata from being materialized.
+  version_projection="$(mktemp -d)"
+  trap 'rm -rf -- "$version_projection"' EXIT INT TERM
+  for version_file in RELEASE_VERSION BUILD_NUMBER VERSION; do
+    [[ -r "$version_root/$version_file" ]] \
+      || die "Build Identity requires readable $version_file under $version_root" 2
+    install -m 0644 "$version_root/$version_file" "$version_projection/$version_file"
+  done
+
+  source_commit="${PM_SOURCE_COMMIT:-}"
+  if [[ -z "$source_commit" ]]; then
+    source_commit="$(git -C "$version_root" rev-parse HEAD 2>/dev/null || true)"
+    [[ -n "$source_commit" ]] || source_commit=unavailable
+  fi
+
+  source_dirty="${PM_SOURCE_DIRTY:-}"
+  if [[ -z "$source_dirty" ]]; then
+    source_dirty=false
+    if git -C "$version_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      && git -C "$version_root" status --porcelain --untracked-files=normal 2>/dev/null \
+        | grep -Ev '(^|/)(build-info|deploy-info|artifact-manifest)\.json$' \
+        | grep -q .; then
+      source_dirty=true
+    fi
+  fi
+
+  current_json="$(
+    PM_VERSION_ROOT="$version_projection" \
+    PM_SOURCE_COMMIT="$source_commit" \
+    PM_SOURCE_DIRTY="$source_dirty" \
+      "$version_command" current --json
+  )"
+  build_info="$site_dir/build-info.json"
+  if [[ -r "$build_info" ]]; then
+    refresh="$(python3 - "$build_info" "$current_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    existing = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    current = json.loads(sys.argv[2])
+except Exception:
+    print("true")
+    raise SystemExit(0)
+
+same_identity = (
+    str(existing.get("releaseVersion", "")) == str(current.get("releaseVersion", ""))
+    and str(existing.get("buildNumber", "")) == str(current.get("buildNumber", ""))
+)
+preserve_official = same_identity and existing.get("officialBuild") is True
+print("false" if preserve_official else "true")
+PY
+)"
+  fi
+
+  if [[ "$refresh" == true ]]; then
+    PM_VERSION_ROOT="$version_projection" \
+    PM_SOURCE_COMMIT="$source_commit" \
+    PM_SOURCE_DIRTY="$source_dirty" \
+      "$version_command" build materialize --site-dir "$site_dir" >/dev/null
+    log INFO "materialized Portmason Build Identity metadata" "path=$build_info"
+  else
+    log INFO "preserved existing official Build Identity metadata" "path=$build_info"
+  fi
+)
+
+if [[ "$skip_materialize" != true ]]; then
+  materialize_build_identity
+fi
