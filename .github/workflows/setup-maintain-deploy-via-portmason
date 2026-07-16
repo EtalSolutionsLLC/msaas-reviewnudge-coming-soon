@@ -1,4 +1,4 @@
-name: Portmason Setup and Deploy
+name: setup-maintain-deploy-via-portmason
 
 on:
   workflow_dispatch:
