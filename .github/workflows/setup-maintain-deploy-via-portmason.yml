@@ -195,13 +195,11 @@ jobs:
           compression-level: 0
 
       - name: Upload GitHub Pages artifact
-        if: ${{ steps.runtime.outputs.is_static == 'true' }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ steps.runtime.outputs.site_dir }}
 
   deploy-pages:
-    if: ${{ needs.setup.outputs.is_static == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - setup
