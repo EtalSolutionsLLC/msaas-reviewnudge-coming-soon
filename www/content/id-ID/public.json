@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "title": "ReviewNudge diluncurkan secara internasional 20 Juli",
+    "description": "ReviewNudge diluncurkan secara internasional pada Senin, 20 Juli. Kami mengambil beberapa hari tambahan agar rilis pertama ini lebih ramah bagi mereka yang bahasa pertamanya bukan bahasa Inggris."
+  },
+  "accessibility": {
+    "skip": "Lewati ke konten utama",
+    "language": "Pilih bahasa",
+    "primaryNavigation": "Navigasi utama",
+    "serviceFit": "Manfaat utama ReviewNudge",
+    "productAssurances": "Jaminan peluncuran",
+    "previewMockup": "Pratinjau produk ReviewNudge"
+  },
+  "brand": {
+    "homeLabel": "Beranda ReviewNudge",
+    "markLabel": "Lambang ReviewNudge",
+    "product": "ReviewNudge™",
+    "platform": "Dibangun di atas Portmason™"
+  },
+  "nav": {
+    "preview": "Pratinjau",
+    "updates": "Yang akan hadir",
+    "launchDate": "Tanggal peluncuran",
+    "contact": "Kontak",
+    "join": "20 Juli"
+  },
+  "hero": {
+    "eyebrow": "Pembaruan singkat peluncuran",
+    "title": "ReviewNudge diluncurkan secara internasional pada hari Senin.",
+    "body": "Kami tahu tanggal peluncuran 15 Juli telah berlalu. Ketika hari peluncuran tiba, kami menyadari bahwa mereka yang bahasa pertamanya bukan bahasa Inggris layak mendapatkan lebih dari sekadar perhatian simbolis. Kami mengambil beberapa hari tambahan agar rilis pertama ReviewNudge benar-benar bersifat internasional.",
+    "primary": "Lihat yang akan hadir",
+    "secondary": "Diluncurkan 20 Juli",
+    "offerStrong": "Satu tempat yang jelas untuk aktivitas ulasan pelanggan.",
+    "offerBody": "Tautan ulasan, tindak lanjut, status pelanggan, dan visibilitas tim tanpa menjadikan pengelolaan ulasan sebagai proyek platform pemasaran yang rumit.",
+    "fit1": "Penyiapan tiga klik",
+    "fit2": "Pelacakan tindak lanjut",
+    "fit3": "Ruang kerja pelanggan"
+  },
+  "launch": {
+    "kicker": "Peluncuran internasional",
+    "title": "Senin, 20 Juli 2026",
+    "body": "Anda tidak perlu menunggu lama. ReviewNudge diluncurkan secara internasional pada hari Senin dengan pengalaman yang lebih ramah bagi mereka yang bahasa pertamanya bukan bahasa Inggris.",
+    "messageTitle": "Apa yang berubah?",
+    "messageItem1": "Tanggal peluncuran awal kami, 15 Juli, telah berlalu.",
+    "messageItem2": "Kami menggunakan hari-hari tambahan ini agar peluncuran lebih bermakna bagi mereka yang menggunakan bahasa selain bahasa Inggris.",
+    "messageItem3": "Akses peluncuran internasional dibuka pada Senin, 20 Juli.",
+    "assurance1": "Rilis pertama yang lebih inklusif",
+    "assurance2": "Peluncuran internasional 20 Juli"
+  },
+  "updates": {
+    "label": "Yang akan hadir",
+    "step1Number": "01",
+    "step1Title": "Minta",
+    "step1Body": "Kirim permintaan ulasan dari ruang kerja yang rapi selagi pengalaman pelanggan masih segar.",
+    "step2Number": "02",
+    "step2Title": "Lacak",
+    "step2Body": "Lihat pelanggan yang sudah dihubungi, permintaan yang perlu diperhatikan, dan tindak lanjut berikutnya.",
+    "step3Number": "03",
+    "step3Title": "Tumbuh",
+    "step3Body": "Bangun proses ulasan yang lebih konsisten tanpa menambah kerumitan pada pekerjaan harian."
+  },
+  "preview": {
+    "kicker": "Pratinjau produk",
+    "title": "Cara yang lebih rapi untuk mengelola permintaan ulasan.",
+    "body": "ReviewNudge menyatukan tautan ulasan, status pelanggan, tindak lanjut, dan visibilitas tim dalam satu ruang kerja sederhana.",
+    "cta": "Diluncurkan 20 Juli",
+    "toolbar": "Ruang kerja ulasan",
+    "readyCount": "3 siap",
+    "metric1Label": "Permintaan",
+    "metric1Value": "24",
+    "metric2Label": "Tindak lanjut",
+    "metric2Value": "8",
+    "metric3Label": "Ulasan",
+    "metric3Value": "11",
+    "sample1Initials": "HS",
+    "sample1Name": "Pelanggan layanan rumah",
+    "sample1Detail": "Siap menerima permintaan ulasan",
+    "sample1Status": "Siap",
+    "sample2Initials": "LP",
+    "sample2Name": "Klien profesional lokal",
+    "sample2Detail": "Tindak lanjut dijadwalkan",
+    "sample2Status": "Terkirim",
+    "sample3Initials": "ST",
+    "sample3Name": "Pelanggan tim kecil",
+    "sample3Detail": "Ulasan selesai",
+    "sample3Status": "Diulas",
+    "reminderTitle": "Pengingat berikutnya siap",
+    "reminderBody": "Teruskan tindak lanjut tanpa kehilangan jejak."
+  },
+  "footer": {
+    "launch": "© 2026 Et al Solutions LLC. ReviewNudge™ dan Portmason™ adalah merek Et al Solutions LLC."
+  }
+}

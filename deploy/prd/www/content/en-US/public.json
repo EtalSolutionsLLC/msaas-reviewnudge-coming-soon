@@ -1,10 +1,11 @@
 {
   "meta": {
-    "title": "ReviewNudge launches July 15",
-    "description": "ReviewNudge launches July 15. A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace."
+    "title": "ReviewNudge launches internationally July 20",
+    "description": "ReviewNudge launches internationally Monday, July 20. We’re taking a few extra days to make the first release more welcoming for people whose first language isn’t English."
   },
   "accessibility": {
     "skip": "Skip to main content",
+    "language": "Choose language",
     "primaryNavigation": "Primary navigation",
     "serviceFit": "Key ReviewNudge benefits",
     "productAssurances": "Launch assurances",
@@ -21,14 +22,14 @@
     "updates": "What's coming",
     "launchDate": "Launch date",
     "contact": "Contact",
-    "join": "July 15"
+    "join": "July 20"
   },
   "hero": {
-    "eyebrow": "ReviewNudge launches July 15",
-    "title": "ReviewNudge launches July 15.",
-    "body": "A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace.",
+    "eyebrow": "A brief launch update",
+    "title": "ReviewNudge launches internationally Monday.",
+    "body": "We know our July 15 launch date has passed. As launch day arrived, we realized that people whose first language isn’t English deserved more than a token nod. We’re taking a few extra days to make ReviewNudge’s first release genuinely international.",
     "primary": "Preview what's coming",
-    "secondary": "Launching July 15",
+    "secondary": "Launching July 20",
     "offerStrong": "One clear place for customer review activity.",
     "offerBody": "Review links, follow-ups, customer status, and team visibility without turning review management into a marketing-platform project.",
     "fit1": "Three-click setup",
@@ -36,15 +37,15 @@
     "fit3": "Customer workspace"
   },
   "launch": {
-    "kicker": "Launch date",
-    "title": "July 15, 2026",
-    "body": "ReviewNudge will be available beginning July 15. Come back on launch day to start organizing review requests in one clean workspace.",
-    "messageTitle": "What happens on July 15?",
-    "messageItem1": "ReviewNudge opens for launch access.",
-    "messageItem2": "Local service teams can start organizing review requests and follow-ups.",
-    "messageItem3": "The coming-soon page gives way to the live product entry point.",
-    "assurance1": "Built for local service teams",
-    "assurance2": "One organized review workspace"
+    "kicker": "International launch",
+    "title": "Monday, July 20, 2026",
+    "body": "You won’t have to wait long. ReviewNudge launches internationally on Monday, with a more welcoming experience for people whose first language isn’t English.",
+    "messageTitle": "What changed?",
+    "messageItem1": "Our original July 15 launch date has passed.",
+    "messageItem2": "We’re using the additional days to make the launch meaningful for people who use languages other than English.",
+    "messageItem3": "International launch access opens Monday, July 20.",
+    "assurance1": "A more inclusive first release",
+    "assurance2": "Launching internationally July 20"
   },
   "updates": {
     "label": "What's coming",
@@ -62,7 +63,7 @@
     "kicker": "Product preview",
     "title": "A cleaner way to manage review requests.",
     "body": "ReviewNudge is built around one simple workspace for review links, customer status, follow-ups, and team visibility.",
-    "cta": "Launching July 15",
+    "cta": "Launching July 20",
     "toolbar": "Review workspace",
     "readyCount": "3 ready",
     "metric1Label": "Requests",

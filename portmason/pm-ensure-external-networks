@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
-export CUR_SCRIPT
-
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
 . "${PORTMASON_SHARE}/pm-helpers" "$@"
 

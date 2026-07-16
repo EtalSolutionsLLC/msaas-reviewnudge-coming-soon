@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+if ! declare -F log >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers" "$@"
+fi
+if ! declare -F pm_neon_api_request >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers-neon"
+fi
+if ! declare -F pm_db_postgres_build_url >/dev/null 2>&1; then
+    . "${PORTMASON_SHARE}/pm-helpers-postgres"
+fi
+
+: "${POSTGRES_TOOL_IMAGE:=postgres:17-alpine}"
+: "${DB_CONNECT_TIMEOUT_SECONDS:=20}"
+export POSTGRES_TOOL_IMAGE DB_CONNECT_TIMEOUT_SECONDS
+
+pm_db_bridge_preflight() {
+    [[ "${DB_PROVIDER_CODE:-}" == postgres && "${DB_PLATFORM_CODE:-}" == neon ]] || return 0
+    have docker || pm_preflight_error "database.bridge.postgres-neon" "docker" \
+        "Docker is required for containerized PostgreSQL administration and migrations"
+}
+
+pm_neon_discover_admin_identity() {
+    local roles databases selected
+    pm_neon_api_request roles GET \
+        "/projects/${DB_PROJECT_ID}/branches/${DB_BRANCH_ID}/roles"
+    pm_neon_api_request databases GET \
+        "/projects/${DB_PROJECT_ID}/branches/${DB_BRANCH_ID}/databases"
+
+    if [[ -n "${DB_ADMIN_ROLE:-}" ]]; then
+        jq -e --arg name "$DB_ADMIN_ROLE" \
+            'any(.roles[]?; .name == $name)' >/dev/null <<<"$roles" \
+            || die "pm-db-bridge-postgres-neon: configured DB_ADMIN_ROLE does not exist: $DB_ADMIN_ROLE" 2
+    else
+        selected="$(jq -r '
+            ([.roles[]? | select(.name == "neondb_owner")][0].name)
+            // ([.roles[]? | select((.protected // false) == true)][0].name)
+            // .roles[0].name // empty' <<<"$roles")"
+        [[ -n "$selected" ]] \
+            || die "pm-db-bridge-postgres-neon: no administrative Neon role was discovered" 2
+        DB_ADMIN_ROLE="$selected"
+    fi
+
+    if [[ -n "${NEON_ADMIN_DATABASE:-}" ]]; then
+        jq -e --arg name "$NEON_ADMIN_DATABASE" \
+            'any(.databases[]?; .name == $name)' >/dev/null <<<"$databases" \
+            || die "pm-db-bridge-postgres-neon: configured NEON_ADMIN_DATABASE does not exist: $NEON_ADMIN_DATABASE" 2
+    else
+        selected="$(jq -r --arg owner "$DB_ADMIN_ROLE" '
+            ([.databases[]? | select(.name == "neondb")][0].name)
+            // ([.databases[]? | select(.owner_name == $owner)][0].name)
+            // .databases[0].name // empty' <<<"$databases")"
+        [[ -n "$selected" ]] \
+            || die "pm-db-bridge-postgres-neon: no administrative Neon database was discovered" 2
+        NEON_ADMIN_DATABASE="$selected"
+    fi
+
+    export DB_ADMIN_ROLE NEON_ADMIN_DATABASE
+    log INFO "pm-db-bridge-postgres-neon: discovered administrative identity" \
+        "role=$DB_ADMIN_ROLE" "database=$NEON_ADMIN_DATABASE"
+}
+
+pm_neon_hydrate_application_secret() {
+    local key="${1:?key required}"
+    [[ -n "${!key:-}" ]] && return 0
+    if [[ "${ADAPTER_CODE:-}" == gcp ]] \
+        && declare -F pm_gcp_get_secret_value >/dev/null 2>&1; then
+        local value=""
+        if pm_gcp_get_secret_value value "$key"; then
+            printf -v "$key" '%s' "$value"
+            export "$key"
+            log INFO "pm-db-bridge-postgres-neon: loaded application secret from GCP Secret Manager" \
+                "key=$key"
+        fi
+    fi
+    [[ -n "${!key:-}" ]] \
+        || die "pm-db-bridge-postgres-neon: $key is required or must resolve through SECRET_PATHS" 2
+}
+
+pm_neon_prepare_connection_contract() {
+    local admin_direct_uri admin_pooled_uri
+    local NEON_ADMIN_DIRECT_HOST NEON_ADMIN_DIRECT_PORT NEON_ADMIN_DIRECT_USER
+    local NEON_ADMIN_DIRECT_PASSWORD NEON_ADMIN_DIRECT_DATABASE
+    local NEON_ADMIN_POOLED_HOST NEON_ADMIN_POOLED_PORT NEON_ADMIN_POOLED_USER
+    local NEON_ADMIN_POOLED_PASSWORD NEON_ADMIN_POOLED_DATABASE
+
+    pm_neon_hydrate_application_secret DB_USER
+    pm_neon_hydrate_application_secret DB_PASSWORD
+    pm_neon_discover_admin_identity
+    pm_neon_connection_uri admin_direct_uri "$DB_ADMIN_ROLE" "$NEON_ADMIN_DATABASE" false
+    pm_neon_connection_uri admin_pooled_uri "$DB_ADMIN_ROLE" "$NEON_ADMIN_DATABASE" true
+
+    pm_db_postgres_parse_url_into NEON_ADMIN_DIRECT "$admin_direct_uri" \
+        || die "pm-db-bridge-postgres-neon: unable to parse direct administrative connection URI" 2
+    pm_db_postgres_parse_url_into NEON_ADMIN_POOLED "$admin_pooled_uri" \
+        || die "pm-db-bridge-postgres-neon: unable to parse pooled administrative connection URI" 2
+
+    DB_ADMIN_USER="$NEON_ADMIN_DIRECT_USER"
+    DB_ADMIN_PASSWORD="$NEON_ADMIN_DIRECT_PASSWORD"
+    DB_ADMIN_DATABASE="$NEON_ADMIN_DIRECT_DATABASE"
+    NEON_DIRECT_HOST="$NEON_ADMIN_DIRECT_HOST"
+    NEON_POOLED_HOST="$NEON_ADMIN_POOLED_HOST"
+    DB_PORT="$NEON_ADMIN_DIRECT_PORT"
+    DATABASE_SSL_MODE=require
+
+    pm_db_postgres_build_url DATABASE_DIRECT_URL \
+        "$NEON_DIRECT_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" require
+    pm_db_postgres_build_url DATABASE_URL \
+        "$NEON_POOLED_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" require
+
+    case "$NEON_USE_POOLER" in
+        1|true|TRUE|yes|YES|on|ON) DB_HOST="$NEON_POOLED_HOST" ;;
+        0|false|FALSE|no|NO|off|OFF)
+            DB_HOST="$NEON_DIRECT_HOST"
+            DATABASE_URL="$DATABASE_DIRECT_URL"
+            ;;
+        *) die "pm-db-bridge-postgres-neon: NEON_USE_POOLER must be boolean" 2 ;;
+    esac
+
+    export DB_ADMIN_USER DB_ADMIN_PASSWORD DB_ADMIN_DATABASE
+    export NEON_DIRECT_HOST NEON_POOLED_HOST DB_HOST DB_PORT DATABASE_SSL_MODE
+    export DATABASE_URL DATABASE_DIRECT_URL
+
+    log INFO "pm-db-bridge-postgres-neon: prepared canonical connection contract" \
+        "application_host=$DB_HOST" "direct_host=$NEON_DIRECT_HOST" \
+        "port=$DB_PORT" "database=$DB_NAME" \
+        "mode=$([[ "$DB_HOST" == "$NEON_POOLED_HOST" ]] && printf pooled || printf direct)"
+}
+
+db_rt() {
+    local user="${PM_DB_RT_USER:-${DB_USER:?DB_USER required}}"
+    local password="${PM_DB_RT_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD required}}"
+    local database="${PM_DB_RT_DATABASE:-${DB_NAME:?DB_NAME required}}"
+    local host="${NEON_DIRECT_HOST:-${DB_HOST:-}}"
+    local port="${DB_PORT:-5432}"
+
+    # Historical compatibility:
+    # Some callers use `db_rt neon connection-string --psql`.
+    # The bridge already owns the resolved connection contract, so return a
+    # psql-compatible URI without invoking neonctl.
+    if [[ "${1:-}" == "neon" && "${2:-}" == "connection-string" ]]; then
+        shift 2
+
+        local psql_format=false
+        local arg
+
+        for arg in "$@"; do
+            case "$arg" in
+                --psql)
+                    psql_format=true
+                    ;;
+                *)
+                    die "db_rt: unsupported Neon connection-string argument: ${arg}" 2
+                    ;;
+            esac
+        done
+
+        [[ -n "$host" ]] \
+            || die "db_rt: NEON_DIRECT_HOST or DB_HOST is required" 2
+
+        local connection_url=""
+
+        if declare -F pm_db_postgres_build_url >/dev/null 2>&1; then
+            pm_db_postgres_build_url \
+                connection_url \
+                "$host" \
+                "$port" \
+                "$database" \
+                "$user" \
+                "$password" \
+                require
+        else
+            local encoded_user encoded_password encoded_database
+
+            printf -v encoded_user '%s' "$user"
+            printf -v encoded_password '%s' "$password"
+            printf -v encoded_database '%s' "$database"
+
+            connection_url="postgresql://${encoded_user}:${encoded_password}@${host}:${port}/${encoded_database}?sslmode=require"
+        fi
+
+        if [[ "$psql_format" == true ]]; then
+            printf '%s\n' "$connection_url"
+        else
+            printf '%s\n' "$connection_url"
+        fi
+
+        return 0
+    fi
+
+    [[ -n "$host" ]] \
+        || die "db_rt: NEON_DIRECT_HOST or DB_HOST is required" 2
+
+    log DEBUG "pm-db-bridge-postgres-neon: executing PostgreSQL command" \
+        "host=${host}" \
+        "port=${port}" \
+        "database=${database}" \
+        "user=${user}" \
+        "image=${POSTGRES_TOOL_IMAGE}"
+
+    docker run \
+        --rm \

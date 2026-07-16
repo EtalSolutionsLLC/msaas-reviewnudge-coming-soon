@@ -1,0 +1,10 @@
+{
+  "waitlist": {
+    "invalidEmail": "Saisissez une adresse e-mail valide.",
+    "unavailable": "La liste d’attente sera bientôt prête. Revenez dans quelques instants.",
+    "verificationEndpointUnreachable": "Le service de vérification de la liste d’attente est inaccessible.",
+    "verificationTimeout": "La demande de vérification de la liste d’attente a expiré.",
+    "verificationFailed": "Je n’ai pas pu confirmer l’ajout de votre e-mail à la liste. Réessayez. Référence : {traceId}",
+    "submissionFailed": "Je n’ai pas pu confirmer l’ajout de votre e-mail à la liste. Réessayez. Référence : {traceId}"
+  }
+}

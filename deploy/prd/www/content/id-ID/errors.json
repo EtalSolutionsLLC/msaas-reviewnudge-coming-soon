@@ -1,0 +1,10 @@
+{
+  "waitlist": {
+    "invalidEmail": "Masukkan alamat email yang valid.",
+    "unavailable": "Daftar tunggu hampir siap. Silakan kembali sebentar lagi.",
+    "verificationEndpointUnreachable": "Layanan verifikasi daftar tunggu tidak dapat dijangkau.",
+    "verificationTimeout": "Permintaan verifikasi daftar tunggu kehabisan waktu.",
+    "verificationFailed": "Saya tidak dapat memastikan bahwa email Anda telah ditambahkan ke daftar. Coba lagi. Referensi: {traceId}",
+    "submissionFailed": "Saya tidak dapat memastikan bahwa email Anda telah ditambahkan ke daftar. Coba lagi. Referensi: {traceId}"
+  }
+}

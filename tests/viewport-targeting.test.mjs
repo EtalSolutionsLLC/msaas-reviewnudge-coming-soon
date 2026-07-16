@@ -28,12 +28,23 @@ test('updates and preview are sibling viewport targets, not nested targets', asy
   assert.match(html, /<section class="below-grid pm-viewport-target" id="updates"[\s\S]*?<\/section>\s*<section class="preview-frame pm-viewport-target" id="preview"/);
 });
 
-test('short viewport targets use the Portmason usable-viewport variable for centering surface', async () => {
+test('short viewport targets use the usable viewport as a centered staging surface', async () => {
   const html = await readFile(htmlPath, 'utf8');
   assert.match(html, /\.pm-viewport-target\s*\{[\s\S]*min-height:\s*var\(--pm-usable-vh,\s*auto\)/);
   assert.match(html, /\.pm-viewport-target\s*\{[\s\S]*align-content:\s*center/);
+  assert.match(html, /\.pm-viewport-target\s*\{[\s\S]*scroll-margin-top:\s*var\(--pm-header-h,\s*0px\)/);
   assert.match(html, /id="updates"[^>]*data-pm-viewport-target/);
   assert.match(html, /id="preview"[^>]*data-pm-viewport-target/);
+});
+
+test('ordinary scrolling remains native and unsnapped', async () => {
+  const [html, helper] = await Promise.all([
+    readFile(htmlPath, 'utf8'),
+    readFile(helperPath, 'utf8')
+  ]);
+  assert.doesNotMatch(html, /scroll-snap-(?:type|align)/);
+  assert.doesNotMatch(helper, /addEventListener\?\.\(['"](?:scroll|wheel|touchmove)['"]/);
+  assert.match(helper, /root\.addEventListener\('click', clickHandler\)/);
 });
 
 test('Portmason targeting math centers short sections and top-aligns tall sections', async () => {

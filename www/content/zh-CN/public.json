@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "title": "ReviewNudge 将于 7 月 20 日国际发布",
+    "description": "ReviewNudge 将于 7 月 20 日星期一国际发布。我们多花几天时间，让首次发布更好地服务母语不是英语的用户。"
+  },
+  "accessibility": {
+    "skip": "跳至主要内容",
+    "language": "选择语言",
+    "primaryNavigation": "主导航",
+    "serviceFit": "ReviewNudge 的主要优势",
+    "productAssurances": "发布承诺",
+    "previewMockup": "ReviewNudge 产品预览示意图"
+  },
+  "brand": {
+    "homeLabel": "ReviewNudge 首页",
+    "markLabel": "ReviewNudge 标志",
+    "product": "ReviewNudge™",
+    "platform": "基于 Portmason™ 构建"
+  },
+  "nav": {
+    "preview": "产品预览",
+    "updates": "即将推出",
+    "launchDate": "发布日期",
+    "contact": "联系我们",
+    "join": "7 月 20 日"
+  },
+  "hero": {
+    "eyebrow": "简短的发布更新",
+    "title": "ReviewNudge 将于星期一国际发布。",
+    "body": "我们知道原定的 7 月 15 日发布日期已经过去。临近发布时，我们意识到，母语不是英语的用户值得我们认真对待，而不只是象征性地表示关注。因此，我们多用几天时间，让 ReviewNudge 的首次发布真正面向国际用户。",
+    "primary": "预览即将推出的功能",
+    "secondary": "7 月 20 日发布",
+    "offerStrong": "集中管理所有客户评价活动。",
+    "offerBody": "在一个清晰的工作区中管理评价链接、跟进、客户状态和团队进度，而不必把评价管理变成复杂的营销平台项目。",
+    "fit1": "三步完成设置",
+    "fit2": "跟进追踪",
+    "fit3": "客户工作区"
+  },
+  "launch": {
+    "kicker": "国际发布",
+    "title": "2026 年 7 月 20 日，星期一",
+    "body": "无需久等。ReviewNudge 将于星期一国际发布，为母语不是英语的用户带来更友好的体验。",
+    "messageTitle": "发生了什么变化？",
+    "messageItem1": "原定的 7 月 15 日发布日期已经过去。",
+    "messageItem2": "我们利用这几天，让使用英语以外语言的用户获得真正有意义的发布体验。",
+    "messageItem3": "国际发布访问将于 7 月 20 日星期一开放。",
+    "assurance1": "更具包容性的首次发布",
+    "assurance2": "7 月 20 日国际发布"
+  },
+  "updates": {
+    "label": "即将推出",
+    "step1Number": "01",
+    "step1Title": "邀请",
+    "step1Body": "在客户体验仍然清晰时，通过简洁的工作区发送评价邀请。",
+    "step2Number": "02",
+    "step2Title": "追踪",
+    "step2Body": "查看已联系的客户、需要处理的评价邀请以及下一步跟进。",
+    "step3Number": "03",
+    "step3Title": "增长",
+    "step3Body": "无需增加日常工作的复杂度，也能建立更一致的评价流程。"
+  },
+  "preview": {
+    "kicker": "产品预览",
+    "title": "更清晰地管理评价邀请。",
+    "body": "ReviewNudge 以一个简洁的工作区为核心，集中管理评价链接、客户状态、跟进和团队进度。",
+    "cta": "7 月 20 日发布",
+    "toolbar": "评价工作区",
+    "readyCount": "3 项就绪",
+    "metric1Label": "邀请",
+    "metric1Value": "24",
+    "metric2Label": "跟进",
+    "metric2Value": "8",
+    "metric3Label": "评价",
+    "metric3Value": "11",
+    "sample1Initials": "HS",
+    "sample1Name": "家居服务客户",
+    "sample1Detail": "可以发送评价邀请",
+    "sample1Status": "就绪",
+    "sample2Initials": "LP",
+    "sample2Name": "本地专业服务客户",
+    "sample2Detail": "已安排跟进",
+    "sample2Status": "已发送",
+    "sample3Initials": "ST",
+    "sample3Name": "小型团队客户",
+    "sample3Detail": "评价已完成",
+    "sample3Status": "已评价",
+    "reminderTitle": "下一条提醒已就绪",
+    "reminderBody": "持续推进跟进，不遗漏任何进度。"
+  },
+  "footer": {
+    "launch": "© 2026 Et al Solutions LLC。ReviewNudge™ 和 Portmason™ 是 Et al Solutions LLC 的商标。"
+  }
+}

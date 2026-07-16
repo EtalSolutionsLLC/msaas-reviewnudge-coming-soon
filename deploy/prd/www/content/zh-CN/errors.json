@@ -1,0 +1,10 @@
+{
+  "waitlist": {
+    "invalidEmail": "请输入有效的电子邮件地址。",
+    "unavailable": "等候名单即将开放，请稍后再来。",
+    "verificationEndpointUnreachable": "无法连接等候名单验证服务。",
+    "verificationTimeout": "等候名单验证请求已超时。",
+    "verificationFailed": "无法确认您的电子邮件已加入名单，请重试。参考编号：{traceId}",
+    "submissionFailed": "无法确认您的电子邮件已加入名单，请重试。参考编号：{traceId}"
+  }
+}

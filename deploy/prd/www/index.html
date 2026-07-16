@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#d7dee1" />
   <meta name="description" content="" data-copy="public.meta.description" data-copy-attr="content" />
-  <title data-copy="public.meta.title">ReviewNudge launches July 15</title>
+  <title data-copy="public.meta.title">ReviewNudge launches internationally July 20</title>
   <style>
     :root {
       color-scheme: light;
@@ -96,6 +96,17 @@
     a { color: inherit; }
     h1, h2, h3, p { margin-top: 0; }
     button, input { font: inherit; }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     .skip-link {
       position: fixed;
       top: 10px;
@@ -152,7 +163,32 @@
     .product-identity { display: grid; gap: 1px; }
     .product-identity strong { font-size: 20px; letter-spacing: -0.025em; }
     .product-identity small { color: var(--pm-steel); font-size: 10px; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; }
-    .public-nav { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .language-picker {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+      min-height: 40px;
+      padding-inline-start: 12px;
+      border-inline-start: 1px solid rgba(73, 92, 99, 0.24);
+    }
+    .language-picker span { font-size: 16px; line-height: 1; }
+    .language-picker select {
+      max-width: 132px;
+      min-height: 36px;
+      border: 0;
+      border-radius: var(--brand-radius-control);
+      background: transparent;
+      color: var(--pm-foundation-text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      padding: 6px 4px;
+    }
+    .language-picker select:hover { background: var(--brand-grid-line); }
+    .language-picker select:disabled { cursor: wait; opacity: 0.65; }
+    .public-nav { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
     .public-nav a, .button-quiet {
       border-radius: var(--brand-radius-control);
       color: var(--pm-steel);
@@ -209,7 +245,7 @@
       display: inline-block;
       width: 8px;
       height: 8px;
-      margin-right: 8px;
+      margin-inline-end: 8px;
       border-radius: var(--brand-radius-pill);
       background: var(--brand-review);
       box-shadow: var(--brand-shadow-review);
@@ -220,6 +256,7 @@
       font-size: clamp(44px, 6.35vw, 82px);
       line-height: 0.98;
       letter-spacing: -0.052em;
+      overflow-wrap: anywhere;
     }
     .lede {
       max-width: 700px;
@@ -283,7 +320,7 @@
       color: var(--brand-text-soft);
     }
     .launch-message p { margin: 0 0 10px; color: var(--brand-text); }
-    .launch-message ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+    .launch-message ul { margin: 0; padding-inline-start: 20px; line-height: 1.6; }
     .launch-message li + li { margin-top: 4px; }
     .launch-meta {
       display: grid;
@@ -304,7 +341,7 @@
       font-weight: 800;
       text-align: center;
     }
-    .launch-meta span + span { border-left: 1px solid var(--brand-border-subtle); }
+    .launch-meta span + span { border-inline-start: 1px solid var(--brand-border-subtle); }
     .assurance-mark {
       display: inline-grid;
       width: 22px;
@@ -322,7 +359,14 @@
       margin-top: 10px;
     }
     .pm-viewport-target {
+      min-height: var(--pm-usable-vh, auto);
+      align-content: center;
       scroll-margin-top: var(--pm-header-h, 0px);
+    }
+    .pm-viewport-alias {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
     }
     .mini-card {
       min-height: 188px;
@@ -364,7 +408,7 @@
       display: inline-block;
       width: 8px;
       height: 8px;
-      margin-right: 8px;
+      margin-inline-end: 8px;
       border-radius: var(--brand-radius-pill);
       background: var(--brand-service);
     }
@@ -410,12 +454,15 @@
     @media (max-width: 640px) {
       .app-frame::before { display: none; }
       .topbar { position: static; gap: 12px; }
+      .product-identity { display: none; }
+      .language-picker { margin-inline-end: auto; padding-inline-start: 8px; }
+      .language-picker select { max-width: 116px; }
       .topbar-actions .button-quiet { display: none; }
       .coming-soon-grid { min-height: auto; padding-top: 14px; }
       .launch-card { order: -1; }
       .hero-copy { order: 0; }
       .launch-meta { grid-template-columns: 1fr; }
-      .launch-meta span + span { border-left: 0; border-top: 1px solid var(--brand-border-subtle); }
+      .launch-meta span + span { border-inline-start: 0; border-top: 1px solid var(--brand-border-subtle); }
       h1 { font-size: clamp(42px, 14vw, 64px); }
     }
   </style>
@@ -442,6 +489,22 @@
           <small data-copy="public.brand.platform">Built on Portmason™</small>
         </span>
       </a>
+      <div class="language-picker">
+        <span aria-hidden="true">🌐</span>
+        <label class="visually-hidden" for="languageSelect" data-copy="public.accessibility.language">Choose language</label>
+        <select id="languageSelect" data-language-select aria-label="Choose language" data-copy="public.accessibility.language" data-copy-attr="aria-label">
+          <option value="en-US" lang="en">English</option>
+          <option value="zh-CN" lang="zh-Hans">简体中文</option>
+          <option value="hi-IN" lang="hi">हिन्दी</option>
+          <option value="es-ES" lang="es">Español</option>
+          <option value="ar" lang="ar" dir="rtl">العربية</option>
+          <option value="fr-FR" lang="fr">Français</option>
+          <option value="bn-BD" lang="bn">বাংলা</option>
+          <option value="pt-BR" lang="pt">Português</option>
+          <option value="id-ID" lang="id">Bahasa Indonesia</option>
+          <option value="ur-PK" lang="ur" dir="rtl">اردو</option>
+        </select>
+      </div>
       <nav class="public-nav" aria-label="Primary navigation" data-copy="public.accessibility.primaryNavigation" data-copy-attr="aria-label">
         <a href="#preview" data-copy="public.nav.preview">Preview</a>
         <a href="#updates" data-copy="public.nav.updates">What's coming</a>
@@ -449,19 +512,20 @@
       </nav>
       <div class="topbar-actions">
         <a class="button button-quiet" href="mailto:hello@reviewnudge.com" data-copy="public.nav.contact">Contact</a>
-        <a class="button button-primary button-compact" href="#launch-date" data-copy="public.nav.join">July 15</a>
+        <a class="button button-primary button-compact" href="#launch-date" data-copy="public.nav.join">July 20</a>
       </div>
     </header>
 
     <main class="shell" id="mainContent">
       <section class="coming-soon-grid pm-viewport-target" id="top" aria-labelledby="pageTitle" data-pm-viewport-target>
+        <span class="pm-viewport-alias" id="launch-date" aria-hidden="true" data-pm-viewport-target></span>
         <div class="hero-copy">
-          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span><span data-copy="public.hero.eyebrow">ReviewNudge launches July 15</span></p>
-          <h1 id="pageTitle" data-copy="public.hero.title">ReviewNudge launches July 15.</h1>
-          <p class="lede" data-copy="public.hero.body">A simple way for local businesses to manage review requests, follow-ups, and customer feedback in one organized workspace.</p>
+          <p class="eyebrow"><span aria-hidden="true" class="signal-dot"></span><span data-copy="public.hero.eyebrow">A brief launch update</span></p>
+          <h1 id="pageTitle" data-copy="public.hero.title">ReviewNudge launches internationally Monday.</h1>
+          <p class="lede" data-copy="public.hero.body">We know our July 15 launch date has passed. As launch day arrived, we realized that people whose first language isn’t English deserved more than a token nod. We’re taking a few extra days to make ReviewNudge’s first release genuinely international.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="#preview" data-copy="public.hero.primary">Preview what's coming</a>
-            <a class="button button-secondary" href="#launch-date" data-copy="public.hero.secondary">Launching July 15</a>
+            <a class="button button-secondary" href="#launch-date" data-copy="public.hero.secondary">Launching July 20</a>
           </div>
           <p class="offer-line"><strong data-copy="public.hero.offerStrong">One clear place for customer review activity.</strong><br /><span data-copy="public.hero.offerBody">Review links, follow-ups, customer status, and team visibility without turning review management into a marketing-platform project.</span></p>
           <div class="service-fit" aria-label="Key ReviewNudge benefits" data-copy="public.accessibility.serviceFit" data-copy-attr="aria-label">
@@ -471,22 +535,22 @@
           </div>
         </div>
 
-        <section class="launch-card" id="launch-date" aria-labelledby="launchDateTitle">
+        <section class="launch-card" aria-labelledby="launchDateTitle">
           <div aria-hidden="true" class="launch-rail"><span></span><span></span><span></span></div>
-          <p class="section-kicker" data-copy="public.launch.kicker">Launch date</p>
-          <h2 id="launchDateTitle" data-copy="public.launch.title">July 15, 2026</h2>
-          <p data-copy="public.launch.body">ReviewNudge will be available beginning July 15. Come back on launch day to start organizing review requests in one clean workspace.</p>
+          <p class="section-kicker" data-copy="public.launch.kicker">International launch</p>
+          <h2 id="launchDateTitle" data-copy="public.launch.title">Monday, July 20, 2026</h2>
+          <p data-copy="public.launch.body">You won’t have to wait long. ReviewNudge launches internationally on Monday, with a more welcoming experience for people whose first language isn’t English.</p>
           <div class="launch-message">
-            <p><strong data-copy="public.launch.messageTitle">What happens on July 15?</strong></p>
+            <p><strong data-copy="public.launch.messageTitle">What changed?</strong></p>
             <ul>
-              <li data-copy="public.launch.messageItem1">ReviewNudge opens for launch access.</li>
-              <li data-copy="public.launch.messageItem2">Local service teams can start organizing review requests and follow-ups.</li>
-              <li data-copy="public.launch.messageItem3">The coming-soon page gives way to the live product entry point.</li>
+              <li data-copy="public.launch.messageItem1">Our original July 15 launch date has passed.</li>
+              <li data-copy="public.launch.messageItem2">We’re using the additional days to make the launch meaningful for people who use languages other than English.</li>
+              <li data-copy="public.launch.messageItem3">International launch access opens Monday, July 20.</li>
             </ul>
           </div>
           <footer class="launch-meta" aria-label="Launch assurances" data-copy="public.accessibility.productAssurances" data-copy-attr="aria-label">
-            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance1">Built for local service teams</span></span>
-            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance2">One organized review workspace</span></span>
+            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance1">A more inclusive first release</span></span>
+            <span><i aria-hidden="true" class="assurance-mark">✓</i><span data-copy="public.launch.assurance2">Launching internationally July 20</span></span>
           </footer>
         </section>
       </section>
@@ -515,7 +579,7 @@
           <h2 id="previewTitle" data-copy="public.preview.title">A cleaner way to manage review requests.</h2>
           <p data-copy="public.preview.body">ReviewNudge is built around one simple workspace for review links, customer status, follow-ups, and team visibility.</p>
           <div class="hero-actions">
-            <a class="button button-secondary" href="#launch-date" data-copy="public.preview.cta">Launching July 15</a>
+            <a class="button button-secondary" href="#launch-date" data-copy="public.preview.cta">Launching July 20</a>
           </div>
         </div>
         <div class="preview-window" aria-label="ReviewNudge product preview mockup" data-copy="public.accessibility.previewMockup" data-copy-attr="aria-label">

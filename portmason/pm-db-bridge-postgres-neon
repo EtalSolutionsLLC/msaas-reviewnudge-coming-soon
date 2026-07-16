@@ -3,18 +3,24 @@ set -euo pipefail
 
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
 if ! declare -F log >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
     . "${PORTMASON_SHARE}/pm-helpers" "$@"
 fi
 if ! declare -F pm_neon_api_request >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
     . "${PORTMASON_SHARE}/pm-helpers-neon"
 fi
 if ! declare -F pm_db_postgres_build_url >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
     . "${PORTMASON_SHARE}/pm-helpers-postgres"
 fi
 
 : "${POSTGRES_TOOL_IMAGE:=postgres:17-alpine}"
 : "${DB_CONNECT_TIMEOUT_SECONDS:=20}"
+: "${DB_VISIBILITY_MAX_ATTEMPTS:=15}"
+: "${DB_VISIBILITY_RETRY_SECONDS:=2}"
 export POSTGRES_TOOL_IMAGE DB_CONNECT_TIMEOUT_SECONDS
+export DB_VISIBILITY_MAX_ATTEMPTS DB_VISIBILITY_RETRY_SECONDS
 
 pm_db_bridge_preflight() {
     [[ "${DB_PROVIDER_CODE:-}" == postgres && "${DB_PLATFORM_CODE:-}" == neon ]] || return 0
@@ -23,16 +29,22 @@ pm_db_bridge_preflight() {
 }
 
 pm_neon_discover_admin_identity() {
-    local roles databases selected
-    pm_neon_api_request roles GET \
-        "/projects/${NEON_PROJECT_ID}/branches/${NEON_BRANCH_ID}/roles"
-    pm_neon_api_request databases GET \
-        "/projects/${NEON_PROJECT_ID}/branches/${NEON_BRANCH_ID}/databases"
+    local roles=""
+    local databases=""
+    local selected=""
 
-    if [[ -n "${NEON_ADMIN_ROLE:-}" ]]; then
-        jq -e --arg name "$NEON_ADMIN_ROLE" \
+    : "${DB_PROJECT_ID:?DB_PROJECT_ID required}"
+    : "${DB_BRANCH_ID:?DB_BRANCH_ID required}"
+
+    pm_neon_api_request roles GET \
+        "/projects/${DB_PROJECT_ID}/branches/${DB_BRANCH_ID}/roles"
+    pm_neon_api_request databases GET \
+        "/projects/${DB_PROJECT_ID}/branches/${DB_BRANCH_ID}/databases"
+
+    if [[ -n "${DB_ADMIN_ROLE:-}" ]]; then
+        jq -e --arg name "$DB_ADMIN_ROLE" \
             'any(.roles[]?; .name == $name)' >/dev/null <<<"$roles" \
-            || die "pm-db-bridge-postgres-neon: configured NEON_ADMIN_ROLE does not exist: $NEON_ADMIN_ROLE" 2
+            || die "pm-db-bridge-postgres-neon: configured DB_ADMIN_ROLE does not exist: $DB_ADMIN_ROLE" 2
     else
         selected="$(jq -r '
             ([.roles[]? | select(.name == "neondb_owner")][0].name)
@@ -40,63 +52,95 @@ pm_neon_discover_admin_identity() {
             // .roles[0].name // empty' <<<"$roles")"
         [[ -n "$selected" ]] \
             || die "pm-db-bridge-postgres-neon: no administrative Neon role was discovered" 2
-        NEON_ADMIN_ROLE="$selected"
+        DB_ADMIN_ROLE="$selected"
     fi
 
-    if [[ -n "${NEON_ADMIN_DATABASE:-}" ]]; then
-        jq -e --arg name "$NEON_ADMIN_DATABASE" \
+    if [[ -n "${DB_ADMIN_DATABASE:-}" ]]; then
+        jq -e --arg name "$DB_ADMIN_DATABASE" \
             'any(.databases[]?; .name == $name)' >/dev/null <<<"$databases" \
-            || die "pm-db-bridge-postgres-neon: configured NEON_ADMIN_DATABASE does not exist: $NEON_ADMIN_DATABASE" 2
+            || die "pm-db-bridge-postgres-neon: configured DB_ADMIN_DATABASE does not exist: $DB_ADMIN_DATABASE" 2
     else
-        selected="$(jq -r --arg owner "$NEON_ADMIN_ROLE" '
+        selected="$(jq -r --arg owner "$DB_ADMIN_ROLE" '
             ([.databases[]? | select(.name == "neondb")][0].name)
             // ([.databases[]? | select(.owner_name == $owner)][0].name)
             // .databases[0].name // empty' <<<"$databases")"
         [[ -n "$selected" ]] \
             || die "pm-db-bridge-postgres-neon: no administrative Neon database was discovered" 2
-        NEON_ADMIN_DATABASE="$selected"
+        DB_ADMIN_DATABASE="$selected"
     fi
 
-    export NEON_ADMIN_ROLE NEON_ADMIN_DATABASE
+    export DB_ADMIN_ROLE DB_ADMIN_DATABASE
     log INFO "pm-db-bridge-postgres-neon: discovered administrative identity" \
-        "role=$NEON_ADMIN_ROLE" "database=$NEON_ADMIN_DATABASE"
+        "role=$DB_ADMIN_ROLE" "database=$DB_ADMIN_DATABASE"
 }
 
 pm_neon_hydrate_application_secret() {
     local key="${1:?key required}"
     [[ -n "${!key:-}" ]] && return 0
+
+    local path_key="${key}_PATH"
+    local secret_path="${!path_key:-}"
+    local value=""
+
+    if [[ -n "$secret_path" ]] && declare -F get_secret >/dev/null 2>&1; then
+        if ! value="$(get_secret "$secret_path")"; then
+            die "pm-db-bridge-postgres-neon: unable to retrieve $key from configured secret path" 2
+        fi
+        [[ -n "$value" ]] \
+            || die "pm-db-bridge-postgres-neon: retrieved $key is empty" 2
+        printf -v "$key" '%s' "$value"
+        export "$key"
+        log INFO "pm-db-bridge-postgres-neon: loaded application secret" \
+            "key=$key" "path=$secret_path"
+        return 0
+    fi
+
     if [[ "${ADAPTER_CODE:-}" == gcp ]] \
         && declare -F pm_gcp_get_secret_value >/dev/null 2>&1; then
-        local value=""
         if pm_gcp_get_secret_value value "$key"; then
+            [[ -n "$value" ]] \
+                || die "pm-db-bridge-postgres-neon: resolved $key is empty" 2
             printf -v "$key" '%s' "$value"
             export "$key"
             log INFO "pm-db-bridge-postgres-neon: loaded application secret from GCP Secret Manager" \
                 "key=$key"
+            return 0
         fi
     fi
-    [[ -n "${!key:-}" ]] \
-        || die "pm-db-bridge-postgres-neon: $key is required or must resolve through SECRET_PATHS" 2
+
+    die "pm-db-bridge-postgres-neon: $key is required or must resolve through its configured secret path" 2
 }
 
 pm_neon_prepare_connection_contract() {
-    local admin_direct_uri admin_pooled_uri
-    local NEON_ADMIN_DIRECT_HOST NEON_ADMIN_DIRECT_PORT NEON_ADMIN_DIRECT_USER
-    local NEON_ADMIN_DIRECT_PASSWORD NEON_ADMIN_DIRECT_DATABASE
-    local NEON_ADMIN_POOLED_HOST NEON_ADMIN_POOLED_PORT NEON_ADMIN_POOLED_USER
-    local NEON_ADMIN_POOLED_PASSWORD NEON_ADMIN_POOLED_DATABASE
+    local admin_direct_uri=""
+    local admin_pooled_uri=""
+    local NEON_ADMIN_DIRECT_HOST=""
+    local NEON_ADMIN_DIRECT_PORT=""
+    local NEON_ADMIN_DIRECT_USER=""
+    local NEON_ADMIN_DIRECT_PASSWORD=""
+    local NEON_ADMIN_DIRECT_DATABASE=""
+    local NEON_ADMIN_POOLED_HOST=""
+    local NEON_ADMIN_POOLED_PORT=""
+    local NEON_ADMIN_POOLED_USER=""
+    local NEON_ADMIN_POOLED_PASSWORD=""
+    local NEON_ADMIN_POOLED_DATABASE=""
+
+    : "${DB_NAME:?DB_NAME required}"
+    : "${NEON_USE_POOLER:=true}"
 
     pm_neon_hydrate_application_secret DB_USER
     pm_neon_hydrate_application_secret DB_PASSWORD
     pm_neon_discover_admin_identity
-    pm_neon_connection_uri admin_direct_uri "$NEON_ADMIN_ROLE" "$NEON_ADMIN_DATABASE" false
-    pm_neon_connection_uri admin_pooled_uri "$NEON_ADMIN_ROLE" "$NEON_ADMIN_DATABASE" true
+    pm_neon_connection_uri admin_direct_uri "$DB_ADMIN_ROLE" "$DB_ADMIN_DATABASE" false
+    pm_neon_connection_uri admin_pooled_uri "$DB_ADMIN_ROLE" "$DB_ADMIN_DATABASE" true
 
     pm_db_postgres_parse_url_into NEON_ADMIN_DIRECT "$admin_direct_uri" \
         || die "pm-db-bridge-postgres-neon: unable to parse direct administrative connection URI" 2
     pm_db_postgres_parse_url_into NEON_ADMIN_POOLED "$admin_pooled_uri" \
         || die "pm-db-bridge-postgres-neon: unable to parse pooled administrative connection URI" 2
 
+    DB_ADMIN_HOST="$NEON_ADMIN_DIRECT_HOST"
+    DB_ADMIN_PORT="$NEON_ADMIN_DIRECT_PORT"
     DB_ADMIN_USER="$NEON_ADMIN_DIRECT_USER"
     DB_ADMIN_PASSWORD="$NEON_ADMIN_DIRECT_PASSWORD"
     DB_ADMIN_DATABASE="$NEON_ADMIN_DIRECT_DATABASE"
@@ -111,43 +155,116 @@ pm_neon_prepare_connection_contract() {
         "$NEON_POOLED_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" require
 
     case "$NEON_USE_POOLER" in
-        1|true|TRUE|yes|YES|on|ON) DB_HOST="$NEON_POOLED_HOST" ;;
+        1|true|TRUE|yes|YES|on|ON)
+            DB_HOST="$NEON_POOLED_HOST"
+            ;;
         0|false|FALSE|no|NO|off|OFF)
             DB_HOST="$NEON_DIRECT_HOST"
             DATABASE_URL="$DATABASE_DIRECT_URL"
             ;;
-        *) die "pm-db-bridge-postgres-neon: NEON_USE_POOLER must be boolean" 2 ;;
+        *)
+            die "pm-db-bridge-postgres-neon: NEON_USE_POOLER must be boolean" 2
+            ;;
     esac
 
-    export DB_ADMIN_USER DB_ADMIN_PASSWORD DB_ADMIN_DATABASE
+    export DB_ADMIN_HOST DB_ADMIN_PORT DB_ADMIN_USER DB_ADMIN_PASSWORD DB_ADMIN_DATABASE
     export NEON_DIRECT_HOST NEON_POOLED_HOST DB_HOST DB_PORT DATABASE_SSL_MODE
     export DATABASE_URL DATABASE_DIRECT_URL
 
     log INFO "pm-db-bridge-postgres-neon: prepared canonical connection contract" \
-        "application_host=$DB_HOST" "direct_host=$NEON_DIRECT_HOST" \
-        "port=$DB_PORT" "database=$DB_NAME" \
+        "admin_host=$DB_ADMIN_HOST" \
+        "application_host=$DB_HOST" \
+        "direct_host=$NEON_DIRECT_HOST" \
+        "port=$DB_PORT" \
+        "database=$DB_NAME" \
         "mode=$([[ "$DB_HOST" == "$NEON_POOLED_HOST" ]] && printf pooled || printf direct)"
 }
 
+pm_neon_database_is_visible() {
+    local host="${1:?host required}"
+    local port="${2:?port required}"
+    local database="${3:?database required}"
+    local user="${4:?user required}"
+    local password="${5:?password required}"
+
+    docker run --rm \
+        --env "PGHOST=$host" \
+        --env "PGPORT=$port" \
+        --env "PGDATABASE=$database" \
+        --env "PGUSER=$user" \
+        --env "PGPASSWORD=$password" \
+        --env "PGSSLMODE=require" \
+        --env "PGCONNECT_TIMEOUT=$DB_CONNECT_TIMEOUT_SECONDS" \
+        "$POSTGRES_TOOL_IMAGE" \
+        psql --no-psqlrc --set ON_ERROR_STOP=1 \
+            --tuples-only --no-align --command='SELECT 1;' \
+        >/dev/null 2>&1
+}
+
+pm_neon_wait_for_database() {
+    local host="${1:?host required}"
+    local port="${2:?port required}"
+    local database="${3:?database required}"
+    local user="${4:?user required}"
+    local password="${5:?password required}"
+    local attempt=1
+
+    while (( attempt <= DB_VISIBILITY_MAX_ATTEMPTS )); do
+        if pm_neon_database_is_visible "$host" "$port" "$database" "$user" "$password"; then
+            (( attempt == 1 )) || log INFO \
+                "pm-db-bridge-postgres-neon: database became available" \
+                "database=$database" "host=$host" "attempt=$attempt"
+            return 0
+        fi
+
+        (( attempt == 1 )) && log INFO \
+            "pm-db-bridge-postgres-neon: waiting for database visibility" \
+            "database=$database" "host=$host" \
+            "max_attempts=$DB_VISIBILITY_MAX_ATTEMPTS"
+
+        sleep "$DB_VISIBILITY_RETRY_SECONDS"
+        ((attempt += 1))
+    done
+
+    die "pm-db-bridge-postgres-neon: database did not become available: $database on $host" 2
+}
+
 db_rt() {
-    local user="${PM_DB_RT_USER:-${DB_USER:?DB_USER required}}"
-    local password="${PM_DB_RT_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD required}}"
-    local database="${PM_DB_RT_DATABASE:-${DB_NAME:?DB_NAME required}}"
-    local host="${NEON_DIRECT_HOST:?NEON_DIRECT_HOST required}"
-    local port="${DB_PORT:-5432}"
+    local host="${PM_DB_RT_HOST:-${DB_ADMIN_HOST:-${NEON_DIRECT_HOST:-}}}"
+    local port="${PM_DB_RT_PORT:-${DB_ADMIN_PORT:-${DB_PORT:-5432}}}"
+    local user="${PM_DB_RT_USER:-${DB_USER:-}}"
+    local password="${PM_DB_RT_PASSWORD:-${DB_PASSWORD:-}}"
+    local database="${PM_DB_RT_DATABASE:-${DB_NAME:-}}"
+
+    [[ -n "$host" ]] || die "db_rt: database host is required" 2
+    [[ -n "$port" ]] || die "db_rt: database port is required" 2
+    [[ -n "$user" ]] || die "db_rt: database user is required" 2
+    [[ -n "$password" ]] || die "db_rt: database password is required" 2
+    [[ -n "$database" ]] || die "db_rt: database name is required" 2
+
+    case "$port" in
+        ''|*[!0-9]*) die "db_rt: database port must be numeric: $port" 2 ;;
+    esac
 
     log DEBUG "pm-db-bridge-postgres-neon: executing PostgreSQL command" \
         "host=$host" "port=$port" "database=$database" "user=$user" \
         "image=$POSTGRES_TOOL_IMAGE"
 
-    PGHOST="$host" PGPORT="$port" PGDATABASE="$database" PGUSER="$user" \
-    PGPASSWORD="$password" PGSSLMODE=require \
-    PM_DB_SQL_SECRET="${PM_DB_SQL_SECRET:-}" \
-        docker run --rm -i \
-            --env PGHOST --env PGPORT --env PGDATABASE --env PGUSER \
-            --env PGPASSWORD --env PGSSLMODE --env PM_DB_SQL_SECRET \
-            --env PGCONNECT_TIMEOUT="$DB_CONNECT_TIMEOUT_SECONDS" \
-            "$POSTGRES_TOOL_IMAGE" psql --no-psqlrc --set ON_ERROR_STOP=1 "$@"
+    if [[ "$database" != "${DB_ADMIN_DATABASE:-}" ]]; then
+        pm_neon_wait_for_database "$host" "$port" "$database" "$user" "$password"
+    fi
+
+    docker run --rm --interactive \
+        --env "PGHOST=$host" \
+        --env "PGPORT=$port" \
+        --env "PGDATABASE=$database" \
+        --env "PGUSER=$user" \
+        --env "PGPASSWORD=$password" \
+        --env "PGSSLMODE=require" \
+        --env "PGCONNECT_TIMEOUT=$DB_CONNECT_TIMEOUT_SECONDS" \
+        --env "PM_DB_SQL_SECRET=${PM_DB_SQL_SECRET:-}" \
+        "$POSTGRES_TOOL_IMAGE" \
+        psql --no-psqlrc --set ON_ERROR_STOP=1 "$@"
 }
 
 pm_db_bridge_provision() {
@@ -163,6 +280,11 @@ pm_db_bridge_deploy() {
         || die "pm-db-bridge-postgres-neon requires postgres-neon" 2
     log INFO "pm-db-bridge-postgres-neon: starting deploy binding"
     pm_neon_prepare_connection_contract
-    db_rt --tuples-only --no-align --command='SELECT 1;' >/dev/null
+    PM_DB_RT_HOST="$NEON_DIRECT_HOST" \
+    PM_DB_RT_PORT="$DB_PORT" \
+    PM_DB_RT_USER="$DB_USER" \
+    PM_DB_RT_PASSWORD="$DB_PASSWORD" \
+    PM_DB_RT_DATABASE="$DB_NAME" \
+        db_rt --tuples-only --no-align --command='SELECT 1;' >/dev/null
     log INFO "pm-db-bridge-postgres-neon: deploy binding verified"
 }

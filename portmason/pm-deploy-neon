@@ -2,16 +2,11 @@
 set -euo pipefail
 
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-if ! declare -F log >/dev/null 2>&1; then
-    . "${PORTMASON_SHARE}/pm-helpers" "$@"
-fi
-if ! declare -F pm_neon_api_request >/dev/null 2>&1; then
-    . "${PORTMASON_SHARE}/pm-helpers-neon"
-fi
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
 
 pm_neon_verify_endpoint() {
     local response endpoint state disabled
-    pm_neon_api_request response GET "/projects/${NEON_PROJECT_ID}/endpoints"
+    pm_neon_api_request response GET "/projects/${DB_PROJECT_ID}/endpoints"
     endpoint="$(jq -c --arg id "$NEON_ENDPOINT_ID" \
         '.endpoints[]? | select(.id == $id)' <<<"$response" | head -n1)"
     [[ -n "$endpoint" ]] \
@@ -23,19 +18,19 @@ pm_neon_verify_endpoint() {
         || die "pm-deploy-neon: endpoint is disabled: $NEON_ENDPOINT_ID" 2
 
     log INFO "pm-deploy-neon: endpoint verified" \
-        "project_id=$NEON_PROJECT_ID" "branch_id=$NEON_BRANCH_ID" \
+        "project_id=$DB_PROJECT_ID" "branch_id=$DB_BRANCH_ID" \
         "endpoint_id=$NEON_ENDPOINT_ID" "state=$state"
 }
 
 pm_deploy_db_platform() {
     [[ "${DB_PLATFORM_CODE:-}" == neon ]] \
         || die "pm-deploy-neon requires DB_PLATFORM_CODE=neon" 2
-    : "${NEON_PROJECT_ID:?NEON_PROJECT_ID required}"
-    : "${NEON_BRANCH_ID:?NEON_BRANCH_ID required}"
+    : "${DB_PROJECT_ID:?DB_PROJECT_ID required}"
+    : "${DB_BRANCH_ID:?DB_BRANCH_ID required}"
     : "${NEON_ENDPOINT_ID:?NEON_ENDPOINT_ID required}"
 
     log INFO "pm-deploy-neon: starting platform deployment verification" \
-        "project_id=$NEON_PROJECT_ID" "branch_id=$NEON_BRANCH_ID" \
+        "project_id=$DB_PROJECT_ID" "branch_id=$DB_BRANCH_ID" \
         "endpoint_id=$NEON_ENDPOINT_ID"
     pm_neon_verify_endpoint
     log INFO "pm-deploy-neon: platform deployment verification complete"

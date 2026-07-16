@@ -2,8 +2,12 @@
 set -euo pipefail
 
 
-: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
-export CUR_SCRIPT
+if command -v docker >/dev/null 2>&1; then
+    echo "'docker' command is installed and available."
+else
+    echo "'docker' command is not installed or not available. Cannot continue."
+    exit 1
+fi
 
 env_init_set TRAEFIK_DIR "${TRAEFIK_DIR:-$HOME/code/traefik}"
 env_init_set LOCAL_EXEC_MODE "${LOCAL_EXEC_MODE:-container}"
@@ -45,7 +49,7 @@ get_gcp_secret() {
     )" || die 1
 
     # Return via stdout
-    printf '%s' "${secret_value}"
+sd    printf '%s' "${secret_value}"
 
     unset secret_value
 }

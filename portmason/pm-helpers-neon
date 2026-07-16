@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Neon platform helpers. Safe to source: no infrastructure mutation occurs here.
 
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" $@
+
 if [[ "${__PM_HELPERS_NEON_LOADED:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -14,12 +17,12 @@ export __PM_HELPERS_NEON_LOADED
 : "${NEON_API_MAX_TIME_SECONDS:=90}"
 : "${NEON_OPERATION_ATTEMPTS:=90}"
 : "${NEON_OPERATION_DELAY_SECONDS:=2}"
-: "${NEON_REGION_ID:=aws-us-west-2}"
+: "${DB_REGION_ID:=aws-us-west-2}"
 : "${NEON_PG_VERSION:=17}"
 : "${NEON_BRANCH_NAME:=main}"
 : "${NEON_USE_POOLER:=true}"
 export NEON_API_BASE NEON_API_CONNECT_TIMEOUT_SECONDS NEON_API_MAX_TIME_SECONDS
-export NEON_OPERATION_ATTEMPTS NEON_OPERATION_DELAY_SECONDS NEON_REGION_ID
+export NEON_OPERATION_ATTEMPTS NEON_OPERATION_DELAY_SECONDS DB_REGION_ID
 export NEON_PG_VERSION NEON_BRANCH_NAME NEON_USE_POOLER
 
 neon_urlencode() {
@@ -33,7 +36,7 @@ neon_urlencode() {
 
 neon_adopt_legacy_api_key() {
     if [[ -n "${DB_API_KEY:-}" && -n "${NEON_API_KEY:-}" ]]; then
-        die "DB_API_KEY and deprecated NEON_API_KEY are both configured; remove NEON_API_KEY" 2
+        warn "DB_API_KEY and deprecated NEON_API_KEY are both configured; remove NEON_API_KEY" 2
     fi
     [[ -n "${DB_API_KEY:-}" || -z "${NEON_API_KEY:-}" ]] && return 0
 
@@ -45,39 +48,19 @@ neon_adopt_legacy_api_key() {
 }
 
 neon_load_api_key() {
-    local value=""
-
-    neon_adopt_legacy_api_key
-    [[ -n "${DB_API_KEY:-}" ]] && return 0
-
-    if [[ "${DEPLOY_ENV:-dev}" != "dev" && "${ADAPTER_CODE:-}" == "gcp" ]] \
-        && declare -F pm_gcp_get_secret_value >/dev/null 2>&1; then
-        if pm_gcp_get_secret_value value DB_API_KEY; then
-            DB_API_KEY="$value"
-            export DB_API_KEY
-            log INFO "loaded control-plane credential from GCP Secret Manager" \
-                "key=DB_API_KEY"
-        elif pm_gcp_get_secret_value value NEON_API_KEY; then
-            DB_API_KEY="$value"
-            export DB_API_KEY
-            log WARN "loaded deprecated control-plane secret and mapped it in memory" \
-                "from=NEON_API_KEY" "to=DB_API_KEY"
-        fi
-    fi
+    neon_sync_control_secret
 
     [[ -n "${DB_API_KEY:-}" ]] \
         || die "DB_API_KEY is required or must resolve through SECRET_PATHS" 2
+
 }
 
 neon_sync_control_secret() {
-    [[ "${DEPLOY_ENV:-dev}" != "dev" && "${ADAPTER_CODE:-}" == "gcp" ]] \
-        || return 0
-    declare -F pm_gcp_sync_secret_value >/dev/null 2>&1 \
-        || die "GCP secret helper is unavailable for non-dev control-plane secret synchronization" 2
-    neon_load_api_key
-    pm_gcp_sync_secret_value DB_API_KEY "${DB_API_KEY:-}"
-    log INFO "control-plane credential synchronized" \
-        "provider=gcp-secret-manager" "key=DB_API_KEY"
+    [[ "${DEPLOY_ENV:-dev}" != "dev" ]] || return 0
+    local secret_val=$(get_secret "${DB_API_KEY_PATH:-}") 
+    DB_API_KEY="${secret_val}"
+    export DB_API_KEY
+    log INFO "control-plane credential synchronized" "key=DB_API_KEY" "path=${DB_API_KEY_PATH:-}" "partial_value=${DB_API_KEY:0:5}"
 }
 
 neon_api_request() {
@@ -88,13 +71,18 @@ neon_api_request() {
     local response_file status response_body message
     local -a curl_args
 
+#    =10000
+    DATABASE_STARTUP_ATTEMPTS=30
+    DATABASE_STARTUP_DELAY_MS=1000
+    DATABASE_MAX_TIMEOUT_MS=100000
+
     neon_load_api_key
     response_file="$(mktemp)"
     chmod 600 "$response_file"
     curl_args=(
         --silent --show-error
-        --connect-timeout "$NEON_API_CONNECT_TIMEOUT_SECONDS"
-        --max-time "$NEON_API_MAX_TIME_SECONDS"
+        --connect-timeout "$(( (DATABASE_CONNECTION_TIMEOUT_MS + 999) / 1000 ))"
+        --max-time "$(( (DB_MAX_TIMEOUT_MS + 999) / 1000 ))"
         --request "$method"
         --header 'Accept: application/json'
         --header "Authorization: Bearer ${DB_API_KEY}"
@@ -129,7 +117,7 @@ neon_wait_for_operation() {
     local operation_id="${1:?operation ID required}"
     local attempt response status
     for ((attempt=1; attempt<=NEON_OPERATION_ATTEMPTS; attempt+=1)); do
-        neon_api_request response GET "/projects/${NEON_PROJECT_ID}/operations/${operation_id}"
+        neon_api_request response GET "/projects/${DB_PROJECT_ID}/operations/${operation_id}"
         status="$(jq -r '.operation.status // empty' <<<"$response")"
         log DEBUG "operation status" "operation=$operation_id" \
             "status=${status:-unknown}" "attempt=$attempt"
@@ -160,12 +148,12 @@ neon_connection_uri() {
     local database="${3:?database required}"
     local pooled="${4:?pooled flag required}"
     local branch endpoint db role_enc response uri
-    neon_urlencode branch "$NEON_BRANCH_ID"
+    neon_urlencode branch "$DB_BRANCH_ID"
     neon_urlencode endpoint "$NEON_ENDPOINT_ID"
     neon_urlencode db "$database"
     neon_urlencode role_enc "$role"
     neon_api_request response GET \
-        "/projects/${NEON_PROJECT_ID}/connection_uri?branch_id=${branch}&endpoint_id=${endpoint}&database_name=${db}&role_name=${role_enc}&pooled=${pooled}"
+        "/projects/${DB_PROJECT_ID}/connection_uri?branch_id=${branch}&endpoint_id=${endpoint}&database_name=${db}&role_name=${role_enc}&pooled=${pooled}"
     uri="$(jq -r '.uri // .connection_uri // empty' <<<"$response")"
     [[ -n "$uri" ]] || die "connection URI was not returned" 2
     printf -v "$out_var" '%s' "$uri"
@@ -187,10 +175,10 @@ db_platform_preflight() {
         *) pm_preflight_error "database.platform.neon" "NEON_PG_VERSION" \
             "must be one of 14, 15, 16, 17, or 18" ;;
     esac
-    [[ -n "$NEON_REGION_ID" ]] \
-        || pm_preflight_error "database.platform.neon" "NEON_REGION_ID" "must not be empty"
-    if [[ -n "${NEON_ORG_ID:-}" && ! "$NEON_ORG_ID" =~ ^[a-z0-9-]{1,60}$ ]]; then
-        pm_preflight_error "database.platform.neon" "NEON_ORG_ID" \
+    [[ -n "$DB_REGION_ID" ]] \
+        || pm_preflight_error "database.platform.neon" "DB_REGION_ID" "must not be empty"
+    if [[ -n "${DB_ORG_ID:-}" && ! "$DB_ORG_ID" =~ ^[a-z0-9-]{1,60}$ ]]; then
+        pm_preflight_error "database.platform.neon" "DB_ORG_ID" \
             "must match ^[a-z0-9-]{1,60}$"
     fi
     [[ "$NEON_OPERATION_ATTEMPTS" =~ ^[0-9]+$ && "$NEON_OPERATION_ATTEMPTS" -gt 0 ]] \

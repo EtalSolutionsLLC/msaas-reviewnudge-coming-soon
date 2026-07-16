@@ -19,6 +19,60 @@ if [[ -z ${PM_ENTRY_SCRIPT+x} ]]; then
     echo >&2 "PM_ENTRY_SCRIPT: ${PM_ENTRY_SCRIPT}"
 fi
 
+# Run-level error collection. Entry scripts may print a concise summary at the
+# end without forcing every implementation layer to repeat its diagnostics.
+declare -ga PM_ERROR_SUMMARY_ITEMS=()
+declare -g PM_ERROR_SUMMARY_PRINTED=0
+declare -g PM_ERROR_SUMMARY_ACTIVE=0
+
+pm_error_summary_reset() {
+    PM_ERROR_SUMMARY_ITEMS=()
+    PM_ERROR_SUMMARY_PRINTED=0
+    PM_ERROR_SUMMARY_ACTIVE=0
+}
+
+pm_error_record() {
+    local severity="${1:-ERROR}"
+    local message="${2:-}"
+    shift 2 || true
+    local fields=""
+
+    (( PM_ERROR_SUMMARY_ACTIVE == 0 )) || return 0
+    if (( $# > 0 )); then
+        fields=" $*"
+    fi
+    PM_ERROR_SUMMARY_ITEMS+=("${severity}|${message}${fields}")
+}
+
+pm_error_summary_print() {
+    local count="${#PM_ERROR_SUMMARY_ITEMS[@]}"
+    local item severity message index=0
+
+    (( PM_ERROR_SUMMARY_PRINTED == 0 )) || return 0
+
+    PM_ERROR_SUMMARY_PRINTED=1
+    PM_ERROR_SUMMARY_ACTIVE=1
+
+    # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
+    printf '\n========== ERROR SUMMARY (%s) ==========\n' "$count" >&2
+    if (( count == 0 )); then
+        # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
+        printf 'No errors encountered.\n' >&2
+    else
+        for item in "${PM_ERROR_SUMMARY_ITEMS[@]}"; do
+            ((index += 1))
+            severity="${item%%|*}"
+            message="${item#*|}"
+            # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
+            printf '%2d. [%s] %s\n' "$index" "$severity" "$message" >&2
+        done
+    fi
+    # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
+    printf '=========================================\n' >&2
+
+    PM_ERROR_SUMMARY_ACTIVE=0
+}
+
 #export DEPLOY_ENV="${DEPLOY_ENV:-}"
 
 archive_log_on_session_start() {
@@ -428,8 +482,6 @@ persist_public_host_identity() {
     [[ -v APP_BASE_URL ]] && pm_upsert_env_file_value APP_BASE_URL "$APP_BASE_URL" "$target"
     [[ -v SITE_URL ]] && pm_upsert_env_file_value SITE_URL "$SITE_URL" "$target"
     [[ -v WP_SITE_URL ]] && pm_upsert_env_file_value WP_SITE_URL "$WP_SITE_URL" "$target"
-    # Optional host identities must not determine function success.
-    return 0
 }
 
 
@@ -709,44 +761,63 @@ godaddy_upsert_cname() {
   # Endpoint family: /v1/domains/{domain}/records/{type}/{name} :contentReference[oaicite:1]{index=1}
   curl -sS -X PUT \
     -H "Authorization: sso-key ${GODADDY_API_KEY}:${GODADDY_API_SECRET}" \
+
     -H "Content-Type: application/json" \
     "${GODADDY_API_BASE}/v1/domains/${LOCAL_DOMAIN}/records/CNAME/${STACK}" \
-    --data "[{\"data\":\"${target_url}\",\"ttl\":${GODADDY_API_TTL}}]"
+    --data "[{\"data\":\"${tar
+    get_url}\",\"ttl\":${GODADDY_API_TTL}}]"
 }
 
 secret_spec_parts() {
     # Usage: secret_spec_parts SPEC PROVIDER_OUT SECRET_ID_OUT
-    # SPEC may be either "provider:path" or bare "path". Bare paths default to
-    # GCP so callers can simply use get_secret without knowing the adapter's
-    # backing store. "gcs:" aliases to "gcp:" for historical compatibility.
     local spec="${1:?secret spec required}"
     local provider_out="${2:?provider output variable required}"
     local secret_id_out="${3:?secret id output variable required}"
 
-    local provider secret_id
+    local parsed_provider=""
+    local parsed_secret_id=""
+
     if [[ "$spec" == *":"* ]]; then
-        provider="${spec%%:*}"
-        secret_id="${spec#*:}"
+        parsed_provider="${spec%%:*}"
+        parsed_secret_id="${spec#*:}"
     else
-        provider="${DEFAULT_SECRET_PROVIDER:-gcp}"
-        secret_id="$spec"
+        parsed_provider="${DEFAULT_SECRET_PROVIDER:-gcp}"
+        parsed_secret_id="$spec"
     fi
 
-    [[ -n "$provider" ]] || provider="${DEFAULT_SECRET_PROVIDER:-gcp}"
-    [[ "$provider" == "gcs" ]] && provider="gcp"
+    [[ -n "$parsed_provider" ]] \
+        || parsed_provider="${DEFAULT_SECRET_PROVIDER:-gcp}"
 
-    printf -v "$provider_out" '%s' "$provider"
-    printf -v "$secret_id_out" '%s' "$secret_id"
+    [[ "$parsed_provider" == "gcs" ]] \
+        && parsed_provider="gcp"
+
+    [[ -n "$parsed_secret_id" ]] \
+        || die "Secret identifier is empty in spec: ${spec}" 2
+
+    printf -v "$provider_out" '%s' "$parsed_provider"
+    printf -v "$secret_id_out" '%s' "$parsed_secret_id"
 }
+
 
 get_secret() {
     local spec="${1:?secret spec required}"
-    local provider secret_id fn
+    local provider=""
+    local secret_id=""
+    local fn=""
+
     secret_spec_parts "$spec" provider secret_id
     fn="get_${provider}_secret"
-    declare -F "$fn" >/dev/null 2>&1 || die "get_secret: unsupported secret provider '$provider' for spec '$spec'"
-    "$fn" "${secret_id}"
+
+    declare -F "$fn" >/dev/null 2>&1 \
+        || die "Secret provider function is unavailable: ${fn}" 2
+
+    log INFO "retrieving secret" \
+        "provider=${provider}" \
+        "secret_id=${secret_id}" >&2
+
+    "$fn" "$secret_id"
 }
+
 
 get_secret_name_from_path(){
     local spec="${1:?secret path required}"
@@ -766,7 +837,7 @@ get_secret_name_by_ref() {
 get_secret_path_by_ref() {
   local want="${1:-}"
   [[ -z "$want" ]] && bail "get_secret_path_by_ref: missing ref key" 2
-  : "${SECRET_PATHS:=}" #secret_path consists of [secret_provider (GCS, AZURE, etc)]:[secret_id]
+  : "${SECRET_PATHS:=}" #secret_path consists of [secret_provider (GCP, AZURE, etc)]:[secret_id]
 
   local line ref path
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1341,8 +1412,6 @@ pm_commit_args() {
     echo >&2 "Missing required option for variable: $var_name"
     return 2
   done
-
-  return 0
 }
 
 # parse_args() {
@@ -1741,6 +1810,12 @@ log() {
             ;;
     esac
 
+    case "${severity^^}" in
+        ERROR|CRITICAL)
+            pm_error_record "${severity^^}" "$msg" "${extra_fields[@]}"
+            ;;
+    esac
+
     should_log "${severity}" || return 0
 
     # Timestamp (RFC3339 UTC)
@@ -1984,6 +2059,46 @@ pm_context_resolve_project_root() {
     printf -v "$output_var" '%s' "$candidate"
 }
 
+pm_context_resolve_env_file() {
+    local output_var="${1:?output variable required}"
+    local requested_root="${2:?requested project root required}"
+    local invocation_dir explicit_env candidate
+
+    invocation_dir="$(pwd -P)"
+    explicit_env="${PM_ENV_FILE_OVERRIDE:-}"
+
+    if [[ -n "$explicit_env" ]]; then
+        case "$explicit_env" in
+            /*) candidate="$explicit_env" ;;
+            *) candidate="$invocation_dir/$explicit_env" ;;
+        esac
+    elif [[ -f "$invocation_dir/.env" ]]; then
+        candidate="$invocation_dir/.env"
+    else
+        candidate="$requested_root/.env"
+    fi
+
+    if [[ -e "$candidate" ]]; then
+        candidate="$(cd -- "$(dirname -- "$candidate")" && pwd -P)/$(basename -- "$candidate")"
+    else
+        candidate="$(cd -- "$(dirname -- "$candidate")" && pwd -P)/$(basename -- "$candidate")"
+    fi
+
+    printf -v "$output_var" '%s' "$candidate"
+}
+
+pm_context_env_fingerprint() {
+    local output_var="${1:?output variable required}"
+    local env_file="${2:-}"
+    local fingerprint="missing"
+
+    if [[ -r "$env_file" ]]; then
+        fingerprint="$(sha256sum "$env_file" | awk '{print $1}')"
+    fi
+
+    printf -v "$output_var" '%s' "$fingerprint"
+}
+
 pm_context_path_is_within() {
     local candidate="${1:-}"
     local root="${2:?root required}"
@@ -2144,7 +2259,9 @@ pm_context_reset_project_state() {
         __ENVFILE_LOADED \
         __PM_HELPERS_STATE \
         __PM_HELPERS_PROJECT_ROOT \
-        __PM_HELPERS_PROJECT_ENV_KEYS
+        __PM_HELPERS_PROJECT_ENV_KEYS \
+        __PM_HELPERS_ENV_FILE \
+        __PM_HELPERS_ENV_FINGERPRINT
 
     ENV_INIT_VARS=()
 
@@ -2162,21 +2279,32 @@ pm_context_reset_project_state() {
 
 pm_init() {
     local requested_root
+    local requested_env_file
+    local requested_env_fingerprint
     local cached_root="${__PM_HELPERS_PROJECT_ROOT:-}"
+    local cached_env_file="${__PM_HELPERS_ENV_FILE:-}"
+    local cached_env_fingerprint="${__PM_HELPERS_ENV_FINGERPRINT:-}"
     local cached_state="${__PM_HELPERS_STATE:-}"
 
-    # Resolve the requested context before consulting inherited cache state.
-    # PROJECT_ROOT is deliberately excluded from this resolution path.
+    # Resolve project and environment context from the current invocation
+    # directory before consulting inherited cache state. An inherited ENV_FILE
+    # must never select another deployment environment.
     pm_context_resolve_project_root requested_root
+    pm_context_resolve_env_file requested_env_file "$requested_root"
+    pm_context_env_fingerprint requested_env_fingerprint "$requested_env_file"
 
     case "$cached_state" in
         loaded|loading)
-            if [[ -n "$cached_root" && "$cached_root" == "$requested_root" ]]; then
-                # Normalize owned outputs even when a generic stale PROJECT_ROOT
-                # was injected alongside an otherwise valid cache marker.
+            if [[ -n "$cached_root" \
+                && "$cached_root" == "$requested_root" \
+                && -n "$cached_env_file" \
+                && "$cached_env_file" == "$requested_env_file" \
+                && "$cached_env_fingerprint" == "$requested_env_fingerprint" ]]; then
+
                 PROJECT_ROOT="$requested_root"
                 REPO_ROOT="$requested_root"
-                export PROJECT_ROOT REPO_ROOT
+                ENV_FILE="$requested_env_file"
+                export PROJECT_ROOT REPO_ROOT ENV_FILE
                 return 0 2>/dev/null || exit 0
             fi
 
@@ -2186,10 +2314,16 @@ pm_init() {
 
     __PM_HELPERS_STATE="loading"
     __PM_HELPERS_PROJECT_ROOT="$requested_root"
-    export __PM_HELPERS_STATE __PM_HELPERS_PROJECT_ROOT
+    __PM_HELPERS_ENV_FILE="$requested_env_file"
+    __PM_HELPERS_ENV_FINGERPRINT="$requested_env_fingerprint"
+    export \
+        __PM_HELPERS_STATE \
+        __PM_HELPERS_PROJECT_ROOT \
+        __PM_HELPERS_ENV_FILE \
+        __PM_HELPERS_ENV_FINGERPRINT
 
-    # If init fails, clear both state and context so a later retry is allowed.
-    trap '__PM_HELPERS_STATE=""; __PM_HELPERS_PROJECT_ROOT=""; __PM_HELPERS_PROJECT_ENV_KEYS=""; unset __PM_HELPERS_STATE __PM_HELPERS_PROJECT_ROOT __PM_HELPERS_PROJECT_ENV_KEYS' ERR
+    # If init fails, clear state and context so a later retry is allowed.
+    trap '__PM_HELPERS_STATE=""; __PM_HELPERS_PROJECT_ROOT=""; __PM_HELPERS_PROJECT_ENV_KEYS=""; __PM_HELPERS_ENV_FILE=""; __PM_HELPERS_ENV_FINGERPRINT=""; unset __PM_HELPERS_STATE __PM_HELPERS_PROJECT_ROOT __PM_HELPERS_PROJECT_ENV_KEYS __PM_HELPERS_ENV_FILE __PM_HELPERS_ENV_FINGERPRINT' ERR
 
     env_init_set IN_CONTAINER "${IN_CONTAINER:-false}"
     env_init_set ORIG_PWD "$(pwd -P)"
@@ -2214,7 +2348,9 @@ pm_init() {
     env_init_set MGT_SCRIPTS "${SITE_DIR}/mgt-scripts"
     env_init_set PORTMASON_SHARE "${PORTMASON_SHARE:-"$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
 
-    env_init_set ENV_FILE "${ENV_FILE:-${ORIG_PWD}/.env}"
+    # The resolved invocation-context .env owns project/deployment values.
+    # Do not preserve an inherited ENV_FILE from another directory.
+    env_init_set ENV_FILE "$requested_env_file"
     env_init_set ENV_EXAMPLE_SRC "${ENV_EXAMPLE_SRC:-${PORTMASON_SHARE}/templates/.env.example}"
 
     ensure_env_file "$@"
@@ -2230,10 +2366,17 @@ pm_init() {
 
     sys_bootstrap "$@"
     pm_context_record_project_keys
+    pm_context_env_fingerprint requested_env_fingerprint "$ENV_FILE"
 
     __PM_HELPERS_STATE="loaded"
     __PM_HELPERS_PROJECT_ROOT="$requested_root"
-    export __PM_HELPERS_STATE __PM_HELPERS_PROJECT_ROOT
+    __PM_HELPERS_ENV_FILE="$ENV_FILE"
+    __PM_HELPERS_ENV_FINGERPRINT="$requested_env_fingerprint"
+    export \
+        __PM_HELPERS_STATE \
+        __PM_HELPERS_PROJECT_ROOT \
+        __PM_HELPERS_ENV_FILE \
+        __PM_HELPERS_ENV_FINGERPRINT
 
     trap - ERR
 }
@@ -2334,7 +2477,7 @@ pm_init_read_only() {
     REPO_ROOT="$requested_root"
     ORIG_PWD="$(pwd -P)"
     PORTMASON_SHARE="${PORTMASON_SHARE:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-    ENV_FILE="${ENV_FILE:-${requested_root}/.env}"
+    pm_context_resolve_env_file ENV_FILE "$requested_root"
     export PROJECT_ROOT REPO_ROOT ORIG_PWD PORTMASON_SHARE ENV_FILE
 
     if [[ -r "$ENV_FILE" ]]; then

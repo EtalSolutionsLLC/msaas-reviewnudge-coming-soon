@@ -86,3 +86,13 @@ Build 096 aligns the regression tests and documentation with the deployed one-re
 ## Build 097 mobile launch emphasis
 
 Build 097 makes the launch state unmistakable in the shared content catalog and moves the early-access form above the hero copy on screens up to 640px wide. Desktop and tablet retain the existing two-column and single-column reading order. All rendering and deployment preparation continue to run through `pm-setup`.
+
+## Build 113 international launch and language support
+
+Build 113 replaces the expired July 15 launch messaging with a brief explanation and a clear international launch date of Monday, July 20, 2026. It also adds complete content catalogs for English, Simplified Chinese, Hindi, Spanish, Standard Arabic, French, Bengali, Brazilian Portuguese, Indonesian, and Urdu.
+
+On first visit, the page chooses the first supported language in the browser's preference list and falls back to English. A compact globe selector beside the ReviewNudge logo lets the visitor override that choice. The override is stored for one year in the `reviewnudge_language` preference cookie. Arabic and Urdu automatically use right-to-left page direction.
+
+## Build 114 viewport-target staging
+
+Build 114 restores the Portmason viewport surface for explicit section navigation. Clicking a same-page link centers short section content within the usable viewport and fills the remaining space above and below inside that section, preventing neighboring sections from showing through. Tall sections remain top-aligned beneath the sticky header. Wheel, touch, keyboard, and scrollbar navigation remain native and unsnapped.

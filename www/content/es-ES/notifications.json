@@ -1,0 +1,7 @@
+{
+  "waitlist": {
+    "submitting": "Te estamos añadiendo a la lista de acceso anticipado… Suele tardar entre 10 y 15 segundos.",
+    "success": "Ya estás en la lista. Te avisaré cuando se abra el acceso fundador.",
+    "alreadyRegistered": "Ya estabas en la lista. Te avisaré cuando se abra el acceso fundador."
+  }
+}

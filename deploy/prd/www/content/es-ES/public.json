@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "title": "ReviewNudge se lanza internacionalmente el 20 de julio",
+    "description": "ReviewNudge se lanza internacionalmente el lunes 20 de julio. Nos tomamos unos días más para que esta primera versión reciba mejor a quienes no tienen el inglés como lengua materna."
+  },
+  "accessibility": {
+    "skip": "Saltar al contenido principal",
+    "language": "Elegir idioma",
+    "primaryNavigation": "Navegación principal",
+    "serviceFit": "Ventajas principales de ReviewNudge",
+    "productAssurances": "Compromisos del lanzamiento",
+    "previewMockup": "Vista previa del producto ReviewNudge"
+  },
+  "brand": {
+    "homeLabel": "Inicio de ReviewNudge",
+    "markLabel": "Marca de ReviewNudge",
+    "product": "ReviewNudge™",
+    "platform": "Creado sobre Portmason™"
+  },
+  "nav": {
+    "preview": "Vista previa",
+    "updates": "Lo que viene",
+    "launchDate": "Fecha de lanzamiento",
+    "contact": "Contacto",
+    "join": "20 de julio"
+  },
+  "hero": {
+    "eyebrow": "Una breve actualización",
+    "title": "ReviewNudge se lanza internacionalmente el lunes.",
+    "body": "Sabemos que nuestra fecha de lanzamiento del 15 de julio ya pasó. Al llegar el día, comprendimos que quienes no tienen el inglés como lengua materna merecían algo más que un gesto simbólico. Nos tomamos unos días adicionales para que la primera versión de ReviewNudge sea verdaderamente internacional.",
+    "primary": "Ver lo que viene",
+    "secondary": "Lanzamiento el 20 de julio",
+    "offerStrong": "Un solo lugar para la actividad de reseñas de tus clientes.",
+    "offerBody": "Enlaces de reseñas, seguimientos, estado de clientes y visibilidad del equipo sin convertir la gestión de reseñas en un proyecto de plataforma de marketing.",
+    "fit1": "Configuración en tres clics",
+    "fit2": "Seguimiento organizado",
+    "fit3": "Espacio de trabajo de clientes"
+  },
+  "launch": {
+    "kicker": "Lanzamiento internacional",
+    "title": "Lunes 20 de julio de 2026",
+    "body": "No tendrás que esperar mucho. ReviewNudge se lanza internacionalmente el lunes con una experiencia más acogedora para quienes no tienen el inglés como lengua materna.",
+    "messageTitle": "¿Qué cambió?",
+    "messageItem1": "La fecha de lanzamiento original del 15 de julio ya pasó.",
+    "messageItem2": "Usamos estos días adicionales para que el lanzamiento sea relevante para quienes utilizan otros idiomas además del inglés.",
+    "messageItem3": "El acceso internacional se abre el lunes 20 de julio.",
+    "assurance1": "Una primera versión más inclusiva",
+    "assurance2": "Lanzamiento internacional el 20 de julio"
+  },
+  "updates": {
+    "label": "Lo que viene",
+    "step1Number": "01",
+    "step1Title": "Pide",
+    "step1Body": "Envía solicitudes de reseña desde un espacio claro mientras la experiencia del cliente sigue reciente.",
+    "step2Number": "02",
+    "step2Title": "Sigue",
+    "step2Body": "Consulta qué clientes recibieron un mensaje, qué solicitudes necesitan atención y cuál es el próximo seguimiento.",
+    "step3Number": "03",
+    "step3Title": "Crece",
+    "step3Body": "Crea un proceso de reseñas más consistente sin añadir complejidad al día a día."
+  },
+  "preview": {
+    "kicker": "Vista previa del producto",
+    "title": "Una forma más clara de gestionar solicitudes de reseña.",
+    "body": "ReviewNudge reúne enlaces de reseñas, estados de clientes, seguimientos y visibilidad del equipo en un único espacio de trabajo.",
+    "cta": "Lanzamiento el 20 de julio",
+    "toolbar": "Espacio de reseñas",
+    "readyCount": "3 listas",
+    "metric1Label": "Solicitudes",
+    "metric1Value": "24",
+    "metric2Label": "Seguimientos",
+    "metric2Value": "8",
+    "metric3Label": "Reseñas",
+    "metric3Value": "11",
+    "sample1Initials": "HS",
+    "sample1Name": "Cliente de servicios para el hogar",
+    "sample1Detail": "Listo para solicitar una reseña",
+    "sample1Status": "Listo",
+    "sample2Initials": "LP",
+    "sample2Name": "Cliente profesional local",
+    "sample2Detail": "Seguimiento programado",
+    "sample2Status": "Enviado",
+    "sample3Initials": "ST",
+    "sample3Name": "Cliente de equipo pequeño",
+    "sample3Detail": "Reseña completada",
+    "sample3Status": "Reseñado",
+    "reminderTitle": "El próximo recordatorio está listo",
+    "reminderBody": "Mantén el seguimiento en marcha sin perder el control."
+  },
+  "footer": {
+    "launch": "© 2026 Et al Solutions LLC. ReviewNudge™ y Portmason™ son marcas de Et al Solutions LLC."
+  }
+}

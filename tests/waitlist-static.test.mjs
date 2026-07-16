@@ -9,8 +9,7 @@ const config = readFileSync('www/assets/waitlist-config.js', 'utf8');
 const gas = readFileSync('apps-script/Code.gs', 'utf8');
 const readme = readFileSync('README.md', 'utf8');
 
-test('waitlist assets use static-root-relative paths and module bootstrap', () => {
-  assert.match(index, /src="\.\/assets\/waitlist-config\.js"/);
+test('static assets use relative paths and the page keeps the optional waitlist bootstrap', () => {
   assert.match(index, /type="module" src="\.\/assets\/site\.js"/);
   assert.match(site, /import \{ bindWaitlist \} from '\.\/waitlist\.js'/);
   assert.doesNotMatch(index, /\/www\/assets/);

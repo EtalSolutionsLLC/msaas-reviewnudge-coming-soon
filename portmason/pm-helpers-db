@@ -394,7 +394,13 @@ pm_compose_role_for_service() {
 
 pm_compose_deployable_services_tsv() {
     jq -r '.[]
-        | select(.role != "db" and .role != "cache" and .role != "log-init")
+        | select(
+            .role != "db"
+            and .role != "cache"
+            and .role != "log-init"
+            and .role != "inbound-init"
+            and .role != "proxy"
+        )
         | select(.has_build or (.image | length > 0))
         | [.service, .role, .image, (.has_build | tostring)]
         | @tsv' <<<"${PROJECT_SERVICES:-[]}"
@@ -727,9 +733,12 @@ pm_db_preflight() {
             "errors=${#PM_PREFLIGHT_ERRORS[@]}"
         for item in "${PM_PREFLIGHT_ERRORS[@]}"; do
             IFS='|' read -r category key message <<<"$item"
-            log ERROR "pm-preflight: [$category] $key: $message"
+            pm_error_record ERROR "pm-preflight: [$category] $key: $message"
+            log DEBUG "pm-preflight detail" \
+                "category=$category" "key=$key" "message=$message"
         done
-        log ERROR "pm-preflight: no provisioning or deployment actions were started"
+        pm_error_record ERROR \
+            "pm-preflight: no provisioning or deployment actions were started"
         return 2
     fi
 

@@ -27,15 +27,13 @@ test('content catalogs are valid and every HTML copy key resolves', async () => 
   }
 });
 
-test('index.html contains structure and content keys, not visitor-facing prose', async () => {
+test('index.html keeps resilient English fallbacks behind catalog keys', async () => {
   const html = await readFile(indexPath, 'utf8');
-  const body = html.slice(html.indexOf('<body'), html.indexOf('</body>'))
-    .replace(/<svg[\s\S]*?<\/svg>/g, '')
-    .replace(/<script[\s\S]*?<\/script>/g, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/[✓★\s]+/g, '');
-  assert.equal(body, '');
-  assert.doesNotMatch(html, /A thoughtful nudge|Be first in line|Notify me|Today’s nudges/);
+  const keyedElements = [...html.matchAll(/data-copy="([^"]+)"/g)];
+  assert.ok(keyedElements.length > 40);
+  assert.match(html, /ReviewNudge launches internationally Monday\./);
+  assert.match(html, /Monday, July 20, 2026/);
+  assert.doesNotMatch(html, />Launching July 15</);
 });
 
 test('waitlist timing and outcomes live in JSON rather than browser logic', async () => {

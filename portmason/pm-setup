@@ -68,9 +68,125 @@ if [[ "${1:-}" == "--bootstrap-context" ]]; then
     exit 0
 fi
 
+PM_SETUP_UPDATE_ARCHIVE="${PM_SETUP_UPDATE_ARCHIVE:-}"
+PM_SETUP_UPDATE_SHA256="${PM_SETUP_UPDATE_SHA256:-}"
+PM_SETUP_UPDATE_RECEIPT="${PM_SETUP_UPDATE_RECEIPT:-}"
+PM_SETUP_UPDATE_STARTED_AT="${PM_SETUP_UPDATE_STARTED_AT:-}"
+PM_SETUP_UPDATE_REENTERED="${PM_SETUP_UPDATE_REENTERED:-0}"
+declare -a PM_SETUP_FORWARD_ARGS=()
+
+pm_setup_resolve_update_archive() {
+    local requested="${1:?archive path required}"
+    local candidate=""
+
+    if [[ "$requested" == /* ]]; then
+        candidate="$requested"
+    elif [[ -f "${PM_SETUP_INVOKED_FROM}/${requested}" ]]; then
+        candidate="${PM_SETUP_INVOKED_FROM}/${requested}"
+    else
+        candidate="${PORTMASON_PROJECT_ROOT}/${requested}"
+    fi
+
+    [[ -f "$candidate" ]] \
+        || bootstrap_error "update archive not found: $requested"
+    realpath -- "$candidate"
+}
+
+pm_setup_prepare_update() {
+    local requested="${1:?archive path required}"
+    local archive_name receipt_dir
+
+    command -v sha256sum >/dev/null 2>&1 \
+        || bootstrap_error "sha256sum is required for --update"
+    [[ -x "${PORTMASON_SHARE}/pm-extract-files-from-tar" ]] \
+        || bootstrap_error "pm-extract-files-from-tar is unavailable or not executable"
+
+    PM_SETUP_UPDATE_ARCHIVE="$(pm_setup_resolve_update_archive "$requested")"
+    PM_SETUP_UPDATE_SHA256="$(sha256sum -- "$PM_SETUP_UPDATE_ARCHIVE" | awk '{print $1}')"
+    PM_SETUP_UPDATE_STARTED_AT="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
+    archive_name="$(basename -- "$PM_SETUP_UPDATE_ARCHIVE")"
+    receipt_dir="${PORTMASON_PROJECT_ROOT}/.portmason/updates"
+    mkdir --parents -- "$receipt_dir"
+    PM_SETUP_UPDATE_RECEIPT="${receipt_dir}/${PM_SETUP_UPDATE_SHA256}.json"
+
+    # Extraction is deliberately completed before configuration bootstrap so
+    # every later phase reads the newly applied project state.
+    (
+        cd -- "$PORTMASON_PROJECT_ROOT"
+        "${PORTMASON_SHARE}/pm-extract-files-from-tar" \
+            "$PM_SETUP_UPDATE_ARCHIVE"
+    )
+
+    export PM_SETUP_UPDATE_ARCHIVE PM_SETUP_UPDATE_SHA256 \
+        PM_SETUP_UPDATE_RECEIPT PM_SETUP_UPDATE_STARTED_AT
+    # PM-LINT-MACHINE-OUTPUT: exact update receipt JSON written before normal logging exists.
+    printf '{"archive":"%s","sha256":"%s","startedAt":"%s","result":"extracted"}\n' \
+        "$archive_name" "$PM_SETUP_UPDATE_SHA256" "$PM_SETUP_UPDATE_STARTED_AT" \
+        > "$PM_SETUP_UPDATE_RECEIPT"
+}
+
+pm_setup_parse_bootstrap_args() {
+    local arg
+    while (($#)); do
+        arg="$1"
+        shift
+        case "$arg" in
+            --update)
+                (($#)) || bootstrap_error "--update requires an archive path"
+                [[ -z "$PM_SETUP_UPDATE_ARCHIVE" ]] \
+                    || bootstrap_error "--update may be specified only once"
+                pm_setup_prepare_update "$1"
+                shift
+                ;;
+            --update=*)
+                [[ -z "$PM_SETUP_UPDATE_ARCHIVE" ]] \
+                    || bootstrap_error "--update may be specified only once"
+                [[ -n "${arg#--update=}" ]] \
+                    || bootstrap_error "--update requires an archive path"
+                pm_setup_prepare_update "${arg#--update=}"
+                ;;
+            *)
+                PM_SETUP_FORWARD_ARGS+=("$arg")
+                ;;
+        esac
+    done
+}
+
+pm_setup_parse_bootstrap_args "$@"
+set -- "${PM_SETUP_FORWARD_ARGS[@]}"
+
+# Reload the newly extracted entrypoint before configuration bootstrap. This
+# guarantees that the remainder of the run uses the updated pm-setup and helper
+# code while preserving the original project/deployment working context.
+if [[ -n "${PM_SETUP_UPDATE_ARCHIVE:-}" ]]     && [[ "${PM_SETUP_UPDATE_REENTERED:-0}" != "1" ]]; then
+
+    export PM_SETUP_UPDATE_REENTERED=1
+
+    cd -- "${PM_SETUP_INVOKED_FROM}"
+    exec "${PORTMASON_SHARE}/pm-setup" "$@"
+fi
+
 . "${PORTMASON_SHARE}/pm-helpers" "$@"
 # pm-helpers normally loads this during bootstrap; source idempotently for direct tests.
 . "${PORTMASON_SHARE}/pm-helpers-db"
+
+pm_error_summary_reset
+PM_SETUP_HANDLED_FAILURE=0
+
+pm_setup_write_update_receipt() {
+    local result="${1:?result required}"
+    local rc="${2:-0}"
+    local completed_at archive_name
+
+    [[ -n "${PM_SETUP_UPDATE_RECEIPT:-}" ]] || return 0
+    completed_at="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
+    archive_name="$(basename -- "${PM_SETUP_UPDATE_ARCHIVE}")"
+
+    # Exact update receipt JSON is an intentional printf exception.
+    printf '{"archive":"%s","sha256":"%s","startedAt":"%s","completedAt":"%s","result":"%s","exitCode":%s}\n' \
+        "$archive_name" "$PM_SETUP_UPDATE_SHA256" "$PM_SETUP_UPDATE_STARTED_AT" \
+        "$completed_at" "$result" "$rc" > "$PM_SETUP_UPDATE_RECEIPT"
+}
 
 pm_setup_report_error() {
     local rc="${1:-$?}"
@@ -81,24 +197,25 @@ pm_setup_report_error() {
 
     trap - ERR
 
-    # Treat an already-logged die() as controlled termination.
-    # die() has already emitted the authoritative CRITICAL message.
-    if [[ "${source_file##*/}" == "pm-helpers" && "$function_name" == "die" ]]; then
-        exit "$rc"
+    if [[ "${PM_SETUP_HANDLED_FAILURE:-0}" != 1 ]]; then
+        if declare -F log >/dev/null 2>&1; then
+            log ERROR "unhandled command failure" \
+                "rc=${rc}" \
+                "source=${source_file}" \
+                "line=${source_line}" \
+                "function=${function_name}" \
+                "command=${command}"
+        else
+            # PM-LINT-MACHINE-OUTPUT: bootstrap fallback when logging is unavailable.
+            printf 'ERROR: pm-setup failure rc=%s source=%s line=%s function=%s command=%s\n' \
+                "$rc" "$source_file" "$source_line" "$function_name" "$command" >&2
+        fi
     fi
 
-    if declare -F log >/dev/null 2>&1; then
-        log ERROR "unhandled command failure" \
-            "rc=${rc}" \
-            "source=${source_file}" \
-            "line=${source_line}" \
-            "function=${function_name}" \
-            "command=${command}"
-    else
-        printf 'ERROR: pm-setup failure rc=%s source=%s line=%s function=%s command=%s\n' \
-            "$rc" "$source_file" "$source_line" "$function_name" "$command" >&2
+    if declare -F pm_error_summary_print >/dev/null 2>&1; then
+        pm_error_summary_print
     fi
-
+    pm_setup_write_update_receipt "failed" "$rc"
     exit "$rc"
 }
 
@@ -236,27 +353,41 @@ pm_setup_run_runtime_setup_modules() {
 }
 
 pm_setup_run_application_phase() {
-    local file rc
-    file="${MGT_SCRIPTS:-}/setup"
-    if [[ -r "$file" ]]; then
-        log INFO "phase start" "phase=project-application-setup" "path=$file"
+    local hook_file runtime_file rc
+
+    # Preserve the project application hook as an extensibility point, but do
+    # not allow it to replace or short-circuit Portmason's normal deployment
+    # lifecycle. A successful hook prepares the application; Portmason still
+    # owns runtime loading, bridge deployment, and adapter deployment.
+    hook_file="${MGT_SCRIPTS:-}/setup"
+    if [[ -r "$hook_file" ]]; then
+        log INFO "phase start"             "phase=project-application-setup"             "path=$hook_file"
+
         set +e
-        . "$file" "$@"
+        . "$hook_file" "$@"
         rc=$?
         set -e
+
         case "$rc" in
-            0) log INFO "project application setup complete" ;;
-            1) die "Project setup returned a general error" "$rc" ;;
-            2) die "Project setup reported command misuse" "$rc" ;;
-            *) fatal_error "Project setup returned unexpected code $rc" "$rc" ;;
+            0)
+                log INFO "phase complete"                     "phase=project-application-setup"                     "path=$hook_file"
+                ;;
+            1)
+                die "Project setup returned a general error" "$rc"
+                ;;
+            2)
+                die "Project setup reported command misuse" "$rc"
+                ;;
+            *)
+                fatal_error "Project setup returned unexpected code $rc" "$rc"
+                ;;
         esac
-        return 0
     fi
 
-    file="${PORTMASON_SHARE}/pm-deploy-${RUNTIME_CODE}"
-    if [[ -r "$file" ]]; then
-        log INFO "loading runtime deployment module" "path=$file"
-        . "$file" "$@"
+    runtime_file="${PORTMASON_SHARE}/pm-deploy-${RUNTIME_CODE}"
+    if [[ -r "$runtime_file" ]]; then
+        log INFO "loading runtime deployment module" "path=$runtime_file"
+        . "$runtime_file" "$@"
     fi
 
     if declare -F pm_bridge_deploy >/dev/null 2>&1; then
@@ -372,6 +503,8 @@ main() {
     # any infrastructure-changing action. Required modules are promoted from
     # optional preflight loads only after the complete report passes.
     if ! pm_db_preflight; then
+        PM_SETUP_HANDLED_FAILURE=1
+        pm_error_summary_print
         return 2
     fi
     
@@ -417,6 +550,7 @@ main() {
     fi
 
     pm_setup_log_completion
+    pm_setup_write_update_receipt "deployed" 0
 }
 
 pm_setup_arg REFRESH_FROM_ROOT "--refresh-from-root" export
@@ -424,3 +558,4 @@ pm_setup_arg FORCE_DEPLOY_SYNC "--force-deploy-sync" export
 pm_commit_args "$@"
 
 main "$@"
+pm_error_summary_print
