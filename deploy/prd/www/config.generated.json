@@ -6,5 +6,6 @@
   "DEPLOY_ENV": "prd",
   "APP_HOST": "reviewnudge-coming-soon.etal.solutions",
   "APP_URL": "https://reviewnudge-coming-soon.etal.solutions",
-  "URI_SCHEME": "https"
+  "URI_SCHEME": "https",
+  "LOG_FORMAT": "text"
 }

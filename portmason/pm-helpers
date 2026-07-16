@@ -115,7 +115,36 @@ as_root() {
   fi
 }
 
-bail() { return "${1:-1}" 2>/dev/null || exit "${1:-1}"; }
+bail() {
+    local message=""
+    local rc="1"
+
+    case "${1:-}" in
+        "")
+            ;;
+        *[!0-9]*)
+            message="$1"
+            rc="${2:-1}"
+            ;;
+        *)
+            rc="$1"
+            ;;
+    esac
+
+    case "$rc" in
+        ""|*[!0-9]*) rc="1" ;;
+    esac
+
+    if [[ -n "$message" ]]; then
+        if declare -F log >/dev/null 2>&1; then
+            log ERROR "$message" "exit_code=$rc"
+        else
+            printf 'ERROR: %s (exit_code=%s)\n' "$message" "$rc" >&2
+        fi
+    fi
+
+    return "$rc" 2>/dev/null || exit "$rc"
+}
 
 can_mkdir_p() {
   local target="${1:?path required}"
@@ -158,9 +187,19 @@ cleanup_tail() {
 trap cleanup_tail EXIT INT TERM
 
 die() {
-    local msg="${1:-}"; local rc="${2:-1}"
-    log CRITICAL "$@"
-#   printf '[%(%Y-%m-%dT%H:%M:%S%z)T][%s] ERROR: %s\n' -1 "$script_name" "$msg" >&2
+    local msg="${1:-Process terminated}"
+    local rc="${2:-1}"
+
+    if [[ "$msg" != *[!0-9]* && $# -eq 1 ]]; then
+        rc="$msg"
+        msg="Process terminated"
+    fi
+
+    case "$rc" in
+        ""|*[!0-9]*) rc="1" ;;
+    esac
+
+    log CRITICAL "$msg" "exit_code=$rc"
     bail "$rc"
 }
 
@@ -702,12 +741,40 @@ env_merge_first_wins() {
 
 error() { log ERROR "$@"; }
 
-fatal() { exit "${1:-1}"; }
+fatal() {
+    local msg="Process terminated"
+    local rc="1"
+
+    case "${1:-}" in
+        "")
+            ;;
+        *[!0-9]*)
+            msg="$1"
+            rc="${2:-1}"
+            ;;
+        *)
+            rc="$1"
+            ;;
+    esac
+
+    case "$rc" in
+        ""|*[!0-9]*) rc="1" ;;
+    esac
+
+    log CRITICAL "$msg" "exit_code=$rc"
+    exit "$rc"
+}
 
 fatal_error() {
-    local msg="${1:-}"; local rc="${2:-1}"
-    error "$@"
-    fatal "$rc"
+    local msg="${1:-Fatal error}"
+    local rc="${2:-1}"
+
+    case "$rc" in
+        ""|*[!0-9]*) rc="1" ;;
+    esac
+
+    error "$msg" "exit_code=$rc"
+    exit "$rc"
 }
 
 get_deploy_env_value() {
@@ -1519,6 +1586,84 @@ rotate_archive_if_needed() {
   : > "$archive" 2>/dev/null || true
 }
 
+pm_log_value_is_true() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pm_log_detect_runtime() {
+    local output_var="${1:?output variable required}"
+    local runtime="local"
+    local override="${PM_LOG_RUNTIME_OVERRIDE:-}"
+
+    override="${override,,}"
+    case "$override" in
+        local|ci|github-actions|aws|azure|gcp|kubernetes|container)
+            runtime="$override"
+            ;;
+        "")
+            if pm_log_value_is_true "${GITHUB_ACTIONS:-}"; then
+                runtime="github-actions"
+            elif [[ -n "${K_SERVICE:-}" \
+                || -n "${K_REVISION:-}" \
+                || -n "${K_CONFIGURATION:-}" \
+                || -n "${CLOUD_RUN_JOB:-}" \
+                || -n "${CLOUD_RUN_EXECUTION:-}" \
+                || -n "${GAE_SERVICE:-}" ]]; then
+                runtime="gcp"
+            elif [[ -n "${AWS_EXECUTION_ENV:-}" \
+                || -n "${AWS_LAMBDA_FUNCTION_NAME:-}" \
+                || -n "${AWS_LAMBDA_RUNTIME_API:-}" \
+                || -n "${ECS_CONTAINER_METADATA_URI:-}" \
+                || -n "${ECS_CONTAINER_METADATA_URI_V4:-}" \
+                || -n "${AWS_BATCH_JOB_ID:-}" ]]; then
+                runtime="aws"
+            elif [[ -n "${WEBSITE_INSTANCE_ID:-}" \
+                || -n "${WEBSITE_SITE_NAME:-}" \
+                || -n "${CONTAINER_APP_NAME:-}" \
+                || -n "${CONTAINER_APP_REVISION:-}" \
+                || -n "${FUNCTIONS_WORKER_RUNTIME:-}" ]]; then
+                runtime="azure"
+            elif [[ -n "${KUBERNETES_SERVICE_HOST:-}" ]]; then
+                runtime="kubernetes"
+            elif pm_log_value_is_true "${CI:-}" \
+                || pm_log_value_is_true "${GITLAB_CI:-}" \
+                || pm_log_value_is_true "${TF_BUILD:-}" \
+                || [[ -n "${BUILDKITE:-}" \
+                    || -n "${CIRCLECI:-}" \
+                    || -n "${JENKINS_URL:-}" \
+                    || -n "${TEAMCITY_VERSION:-}" \
+                    || -n "${BITBUCKET_BUILD_NUMBER:-}" \
+                    || -n "${CODEBUILD_BUILD_ID:-}" ]]; then
+                runtime="ci"
+            fi
+            ;;
+        *)
+            # Logging setup is best-effort. An invalid operator override must
+            # never prevent the application from starting.
+            runtime="local"
+            ;;
+    esac
+
+    printf -v "$output_var" '%s' "$runtime"
+}
+
+pm_log_runtime_uses_platform_sink() {
+    case "${1:-local}" in
+        ci|github-actions|aws|azure|gcp|kubernetes|container) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pm_log_runtime_prefers_json() {
+    case "${1:-local}" in
+        aws|azure|gcp|kubernetes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 setup_logging() {
     # Safe runtime-friendly logging setup.
     #
@@ -1526,18 +1671,22 @@ setup_logging() {
     # - Never require sudo.
     # - Never break if log dir/file can’t be created/opened.
     # - Only redirect stdout/stderr to a file if we successfully opened the file.
-    # - Default to container behavior (stdout/stderr) when container detected, unless forced.
+    # - Use the platform collector in CI, managed cloud, and container runtimes.
     # - If archiving occurs, ALWAYS truncate current log afterwards (fresh session file).
     #
     # Knobs:
     #   PM_NO_REDIRECT=1        -> never redirect (always leave stdout/stderr unchanged)
-    #   PM_FORCE_REDIRECT=1     -> redirect even in container (not recommended for Cloud Run)
+    #   PM_FORCE_REDIRECT=1     -> force a file even when a platform collector is detected
+    #   PM_LOG_LOCAL_TEE=0      -> local file-only compatibility mode
+    #   PM_LOG_RUNTIME_OVERRIDE -> local, ci, github-actions, aws, azure, gcp,
+    #                              kubernetes, or container
     #   LOG_DIR=/path           -> preferred log dir
     #   LOG_FILE_CONFIGURE=/p   -> explicit log file path
     #   LOG_TRUNCATE=1          -> truncate LOG_FILE at start (even if no archive)
     #
     # Exports:
-    #   LOG_DIR, LOG_FILE, __HAS_TTY_BEFORE_REDIRECT, IN_CONTAINER
+    #   LOG_DIR, LOG_FILE, PM_LOG_RUNTIME, PM_LOG_SINK,
+    #   __HAS_TTY_BEFORE_REDIRECT, IN_CONTAINER
     #
     # Notes:
     # - This function must never hard-fail. It always returns 0.
@@ -1545,10 +1694,11 @@ setup_logging() {
     # Functions:
     # log [<severity: INFO, WARN, etc. (defaults to INFO)>] <message> -> logs message based on log level
     # ok <message>                                            -> calls log() then returns code 0
-    # bail [<return code (defaults to 1)>]                    -> returns/exits with return code
+    # bail [<message>] [<return code (defaults to 1)>]        -> logs an optional error and returns/exits
+    # die [<message>] [<return code (defaults to 1)>]         -> logs CRITICAL and returns/exits
     # warn <message>                                          -> calls log() with severity WARN
     # error <message>                                         -> calls log() with severity ERROR
-    # fatal [<return code (defaults to 1)>]                   -> exits with return code
+    # fatal [<message>] [<return code (defaults to 1)>]       -> logs CRITICAL and exits
     # fatal_error <message> [<return code (defaults to 1)>]   -> calls error() then exits with return code
 
     # ---- small internal helpers (must not depend on your log()/warn()) ----
@@ -1620,33 +1770,63 @@ setup_logging() {
     [[ -t 0 && -t 1 ]] && __HAS_TTY_BEFORE_REDIRECT=1
     export __HAS_TTY_BEFORE_REDIRECT
 
-    # ---- container detection ----
+    # ---- runtime and container detection ----
+    pm_log_detect_runtime PM_LOG_RUNTIME
     if _sl_detect_container; then IN_CONTAINER=true; fi
-    export IN_CONTAINER
+    if [[ "${IN_CONTAINER:-false}" == true \
+        && "$PM_LOG_RUNTIME" == "local" \
+        && -z "${PM_LOG_RUNTIME_OVERRIDE:-}" ]]; then
+        PM_LOG_RUNTIME="container"
+    fi
+
+    if [[ -z "${LOG_FORMAT:-}" ]]; then
+        if pm_log_runtime_prefers_json "$PM_LOG_RUNTIME"; then
+            LOG_FORMAT="json"
+        else
+            LOG_FORMAT="text"
+        fi
+    fi
+
+    export IN_CONTAINER LOG_FORMAT PM_LOG_RUNTIME
 
     # ---- explicit overrides ----
     if [[ "${PM_NO_REDIRECT:-0}" == "1" ]]; then
         : "${LOG_FILE:=${LOG_FILE_CONFIGURE:-}}"
-        _sl_stderr "[setup_logging] no-redirect (PM_NO_REDIRECT=1); leaving stdout/stderr unchanged"
+        if pm_log_runtime_uses_platform_sink "$PM_LOG_RUNTIME"; then
+            PM_LOG_SINK="platform"
+        else
+            PM_LOG_SINK="console"
+        fi
+        export LOG_FILE PM_LOG_SINK
+        _sl_stderr "[setup_logging] runtime=${PM_LOG_RUNTIME} sink=${PM_LOG_SINK}; leaving stdout/stderr unchanged (PM_NO_REDIRECT=1)"
         return 0
     fi
 
-    # Container behavior:
-    # - Default: do NOT redirect in container (platform captures stdout/stderr).
+    local force_file_only=0
+    if [[ "${PM_FORCE_REDIRECT:-0}" == "1" ]]; then
+        force_file_only=1
+    fi
+
+    # Managed-runtime behavior:
+    # - CI and cloud/container platforms capture stdout/stderr themselves.
     # - Local docker (ADAPTER_CODE=local): prefix every line with "[container]" (text logs only),
     #   but STILL do not redirect unless PM_FORCE_REDIRECT=1.
-    if [[ "${IN_CONTAINER}" == true ]]; then
+    if pm_log_runtime_uses_platform_sink "$PM_LOG_RUNTIME"; then
         local adapter="${ADAPTER_CODE:-}"
 
-        # Forced redirect is allowed (but usually not recommended in managed runtimes).
+        # Forced redirect remains available as an operator escape hatch.
         if [[ "${PM_FORCE_REDIRECT:-0}" == "1" ]]; then
-            _sl_stderr "[setup_logging] WARNING: PM_FORCE_REDIRECT=1 inside container may prevent platform logging from capturing stdout/stderr"
+            _sl_stderr "[setup_logging] WARNING: PM_FORCE_REDIRECT=1 for runtime=${PM_LOG_RUNTIME} may bypass platform log capture"
             # fall through to file-redirect logic below
         else
             : "${LOG_FILE:=${LOG_FILE_CONFIGURE:-}}"
+            PM_LOG_SINK="platform"
+            export LOG_FILE PM_LOG_SINK
 
             # Prefix only in local docker and only for text logs (prefix would break JSON).
-            if [[ "${adapter}" == "local" && "${LOG_FORMAT:-text}" != "json" ]]; then
+            if [[ "$PM_LOG_RUNTIME" == "container" \
+                && "${adapter}" == "local" \
+                && "${LOG_FORMAT:-text}" != "json" ]]; then
                 if [[ "${__PM_CONTAINER_PREFIXED:-0}" != "1" ]]; then
                 export __PM_CONTAINER_PREFIXED=1
                 exec > >(sed -u 's/^/[container] /')
@@ -1654,10 +1834,10 @@ setup_logging() {
                 fi
                 _sl_stderr "[setup_logging] local container detected (ADAPTER_CODE=local); prefixing stdout/stderr with [container]"
             else
-                _sl_stderr "[setup_logging] container detected; leaving stdout/stderr unchanged (set PM_FORCE_REDIRECT=1 to redirect)"
+                _sl_stderr "[setup_logging] runtime=${PM_LOG_RUNTIME} sink=platform format=${LOG_FORMAT}; leaving stdout/stderr attached to the platform collector"
             fi
 
-            # IMPORTANT: Preserve original behavior — no file redirect in containers unless forced.
+            # Platform-owned persistence is the default in managed runtimes.
             return 0
         fi
     fi
@@ -1706,16 +1886,35 @@ setup_logging() {
 
     # ---- open file; redirect only if open succeeded ----
     if ! _sl_file_open_append "$LOG_FILE"; then
+        PM_LOG_SINK="console"
+        export PM_LOG_SINK
         _sl_stderr "[setup_logging] could not open log file; leaving stdout/stderr unchanged: $LOG_FILE"
         return 0
     fi
 
-    # Redirect stdout/stderr to FD 3
-    exec 1>&3 2>&3
+    # Local development defaults to both visible console output and durable
+    # file output. Managed runtimes never reach this branch unless an operator
+    # explicitly forced file-only behavior.
+    if [[ "$force_file_only" -eq 0 ]] \
+        && pm_log_value_is_true "${PM_LOG_LOCAL_TEE:-1}" \
+        && command -v tee >/dev/null 2>&1; then
+        exec 3>&-
+        exec 4>&1
+        exec > >(tee -a "$LOG_FILE" >&4) 2>&1
+        PM_LOG_SINK="console+file"
+    else
+        exec 1>&3 2>&3
+        PM_LOG_SINK="file"
+    fi
+    export PM_LOG_SINK
 
-    # xtrace to file if enabled
+    # xtrace follows the selected sink.
     if [[ "${DEBUG:-0}" == "1" ]]; then
-        export BASH_XTRACEFD=3
+        if [[ "$PM_LOG_SINK" == "console+file" ]]; then
+            export BASH_XTRACEFD=2
+        else
+            export BASH_XTRACEFD=3
+        fi
         export PS4='+ ${BASH_SOURCE##*/}:${LINENO}:${FUNCNAME[0]:-MAIN}(): '
         set -x
     fi
@@ -1725,12 +1924,14 @@ setup_logging() {
         log INFO "SESSION START" \
         "caller=${top_caller}" "pid=$$" "ppid=${PPID:-}" "user=${USER:-}" \
         "host=$(hostname 2>/dev/null || echo unknown >&2)" "cwd=$(pwd -P)" \
-        "redirect=1" "log_file=${LOG_FILE}" "archived=${did_archive}" \
-        "debug=${DEBUG:-0}" "verbose=${VERBOSE:-0}" "IN_CONTAINER=${IN_CONTAINER}"
+        "redirect=${PM_LOG_SINK}" "log_file=${LOG_FILE}" "archived=${did_archive}" \
+        "debug=${DEBUG:-0}" "verbose=${VERBOSE:-0}" "IN_CONTAINER=${IN_CONTAINER}" \
+        "log_runtime=${PM_LOG_RUNTIME}" "log_sink=${PM_LOG_SINK}"
     fi
 
     # Optional live tail (must tolerate no /dev/tty)
-    if declare -F live_tail_autostart >/dev/null 2>&1; then
+    if [[ "$PM_LOG_SINK" == "file" ]] \
+        && declare -F live_tail_autostart >/dev/null 2>&1; then
         live_tail_autostart >/dev/null 2>&1 || true
     fi
 
@@ -1740,21 +1941,27 @@ setup_logging() {
 # Internal: should we emit this severity at current LOG_LEVEL?
 should_log() {
   local severity="${1:-INFO}"
+  local threshold="${LOG_LEVEL:-INFO}"
   local sev_n=20 thr_n=20
+
+  severity="${severity^^}"
+  threshold="${threshold^^}"
 
   case "${severity}" in
     DEBUG)   sev_n=10 ;;
     INFO)    sev_n=20 ;;
     WARNING|WARN) sev_n=30 ;;
     ERROR)   sev_n=40 ;;
+    CRITICAL|FATAL|PANIC) sev_n=50 ;;
     *)       sev_n=20 ;;
   esac
 
-  case "${LOG_LEVEL:-INFO}" in
+  case "$threshold" in
     DEBUG)   thr_n=10 ;;
     INFO)    thr_n=20 ;;
     WARNING|WARN) thr_n=30 ;;
     ERROR)   thr_n=40 ;;
+    CRITICAL|FATAL|PANIC) thr_n=50 ;;
     *)       thr_n=20 ;;
   esac
 
@@ -1810,9 +2017,11 @@ log() {
             ;;
     esac
 
-    case "${severity^^}" in
-        ERROR|CRITICAL)
-            pm_error_record "${severity^^}" "$msg" "${extra_fields[@]}"
+    severity="${severity^^}"
+
+    case "$severity" in
+        ERROR|CRITICAL|FATAL|PANIC)
+            pm_error_record "$severity" "$msg" "${extra_fields[@]}"
             ;;
     esac
 
@@ -1823,14 +2032,38 @@ log() {
     ts="$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ')"
 
     if [[ "${LOG_FORMAT:-text}" == "json" ]]; then
-        local service="${K_SERVICE:-${CLOUD_RUN_SERVICE:-}}"
-        local revision="${K_REVISION:-}"
-        local execution="${CLOUD_RUN_EXECUTION:-}"
-        local task_index="${CLOUD_RUN_TASK_INDEX:-}"
+        local runtime="${PM_LOG_RUNTIME:-local}"
+        local cloud_provider=""
+        local service="${K_SERVICE:-}"
+        local revision="${K_REVISION:-${AWS_LAMBDA_FUNCTION_VERSION:-${CONTAINER_APP_REVISION:-${GAE_VERSION:-}}}}"
+        local execution="${CLOUD_RUN_EXECUTION:-${AWS_BATCH_JOB_ID:-}}"
+        local task_index="${CLOUD_RUN_TASK_INDEX:-${AWS_BATCH_JOB_ARRAY_INDEX:-}}"
+        local instance="${GAE_INSTANCE:-${WEBSITE_INSTANCE_ID:-${CONTAINER_APP_REPLICA_NAME:-}}}"
+        local deployment_id="${PM_DEPLOYMENT_ID:-${DEPLOYMENT_ID:-}}"
+        local correlation_id="${PM_CORRELATION_ID:-${CORRELATION_ID:-}}"
         local script_name="${PM_ENTRY_SCRIPT:-}"
+
+        [[ -n "$service" ]] || service="${CLOUD_RUN_SERVICE:-}"
+        [[ -n "$service" ]] || service="${AWS_LAMBDA_FUNCTION_NAME:-}"
+        [[ -n "$service" ]] || service="${CONTAINER_APP_NAME:-}"
+        [[ -n "$service" ]] || service="${WEBSITE_SITE_NAME:-}"
+        [[ -n "$service" ]] || service="${GAE_SERVICE:-}"
+        [[ -n "$service" ]] || service="${APP_SLUG:-${STACK:-}}"
+
+        case "$runtime" in
+            aws|azure|gcp) cloud_provider="$runtime" ;;
+        esac
 
         local esc_msg="${msg//\\/\\\\}"
         esc_msg="${esc_msg//\"/\\\"}"
+
+        service="${service//\\/\\\\}"; service="${service//\"/\\\"}"
+        revision="${revision//\\/\\\\}"; revision="${revision//\"/\\\"}"
+        execution="${execution//\\/\\\\}"; execution="${execution//\"/\\\"}"
+        task_index="${task_index//\\/\\\\}"; task_index="${task_index//\"/\\\"}"
+        instance="${instance//\\/\\\\}"; instance="${instance//\"/\\\"}"
+        deployment_id="${deployment_id//\\/\\\\}"; deployment_id="${deployment_id//\"/\\\"}"
+        correlation_id="${correlation_id//\\/\\\\}"; correlation_id="${correlation_id//\"/\\\"}"
 
         local extras_json=""
         local k v kv
@@ -1846,11 +2079,16 @@ log() {
 
         local json
         json="{\"severity\":\"${severity}\",\"timestamp\":\"${ts}\",\"message\":\"${esc_msg}\""
+        [[ -n "${runtime:-}"     ]] && json+=",\"runtime\":\"${runtime}\""
+        [[ -n "${cloud_provider:-}" ]] && json+=",\"cloud_provider\":\"${cloud_provider}\""
         [[ -n "${service:-}"     ]] && json+=",\"service\":\"${service}\""
         [[ -n "${script_name:-}" ]] && json+=",\"script\":\"${script_name}\""
         [[ -n "${revision:-}"    ]] && json+=",\"revision\":\"${revision}\""
         [[ -n "${execution:-}"   ]] && json+=",\"execution\":\"${execution}\""
         [[ -n "${task_index:-}"  ]] && json+=",\"task_index\":\"${task_index}\""
+        [[ -n "${instance:-}"    ]] && json+=",\"instance\":\"${instance}\""
+        [[ -n "${deployment_id:-}" ]] && json+=",\"deployment_id\":\"${deployment_id}\""
+        [[ -n "${correlation_id:-}" ]] && json+=",\"correlation_id\":\"${correlation_id}\""
         json+="${extras_json}"
         json+="}"
 
