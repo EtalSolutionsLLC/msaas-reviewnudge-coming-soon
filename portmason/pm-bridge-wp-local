@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+
+rt() {
+    local perform_readiness_check=false
+    local args=()
+
+    # Parse args and strip our custom flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --perform_readiness_check)
+            perform_readiness_check=true
+            ;;
+            *)
+            args+=("$1")
+            ;;
+        esac
+        shift
+    done
+
+    if $perform_readiness_check == "true"; then
+        # Ensure stack is up
+        if ! docker compose ps -q wp >/dev/null 2>&1; then
+            docker compose up -d
+        fi
+
+        # Light readiness guard so compose run doesn't race a cold wp
+        log "performing readiness check"
+        for i in {1..20}; do
+            if docker compose exec -T wp curl -fsS http://localhost/wp-login.php >/dev/null 2>&1; then
+                break
+            fi
+        sleep 1
+        done
+    fi
+
+    # Kill all pagers; still pipe to cat so we never land in ":"
+    docker compose run --rm \
+    -e HOME=/var/www \
+    -e WP_CLI_CACHE_DIR=/tmp/wp-cli-cache \
+    -e PAGER=cat \
+    -e MANPAGER=cat \
+    -e GIT_PAGER=cat \
+    -e LESS= \
+    wpcli wp --no-color --allow-root --path=/var/www/html "${args[@]}" | cat
+}

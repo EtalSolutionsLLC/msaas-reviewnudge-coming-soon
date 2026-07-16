@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# Helpers
+is_localtest_me_cn() {
+  local cn="$1"
+  cn="${cn,,}"
+  cn="${cn%:}"
+  [[ "$cn" == "localtest.me" ]] || [[ "$cn" == *.localtest.me ]]
+}
+
+ensure_mkcert_installed() {
+  if command -v mkcert >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log "mkcert not found; attempting install via apt-get (requires sudo)..."
+
+  if ! command -v apt-get >/dev/null 2>&1; then
+    die "mkcert not found and apt-get is not available. Install mkcert manually, then rerun."
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    die "mkcert not found and sudo is not available. Install mkcert manually, then rerun."
+  fi
+
+  sudo apt-get update
+  sudo apt-get install -y mkcert libnss3-tools
+}
+
+write_site_cert_yml() {
+  local yml_path="$1"
+  local cert_basename="$2"
+  local key_basename="$3"
+
+  cat > "$yml_path" <<YAML
+tls:
+  certificates:
+    - certFile: /certs/${cert_basename}
+      keyFile:  /certs/${key_basename}
+YAML
+}
+
+pm_provision_runtime_platform() {
+    [[ "${ADAPTER_CODE:-}" == "local" ]] || die "pm-provision-local runtime entrypoint requires ADAPTER_CODE=local" 2
+    log INFO "pm-provision-local: starting local runtime provisioning"
+    log "Start provisioning local ..."
+
+    # If URI_SCHEME isn't https (case-insensitive), SSL is not required.
+    local scheme="${URI_SCHEME:-http}"
+    scheme="${scheme,,}"
+    scheme="${scheme%:}"   # allow "https:" too
+
+    local val="${FORCE_SSL_CERT:-}"
+    val="${val,,}"  # normalize to lowercase
+    if [[ $val == 0 || $val == no ]]; then
+        log "End provisioning local"
+        return 0
+    fi
+
+    if [[ "$scheme" != "https" ]]; then
+        log "End provisioning local"
+        return 0
+    fi
+
+    local dir="${TRAEFIK_DIR:-${SSL_CERT_DIR:-}}"
+    : "${dir?TRAEFIK_DIR or SSL_CERT_DIR must be set.}"
+
+    local cert_dir="${dir}/certs"
+    local dyn_dir="${dir}/dynamic"
+    local certs_out="${dir}/out-certs"
+
+    # Prefer an explicit cn override; otherwise use APP_HOST.
+    local cn="${CN:-${APP_HOST:-}}"
+    : "${cn?CN or APP_HOST must be set.}"
+
+    mkdir -p "$cert_dir" "$certs_out" "$dyn_dir"
+
+    pushd "$SITE_DIR" >/dev/null
+
+    log "HTTPS enabled (URI_SCHEME=$scheme). cn=$cn"
+
+    if is_localtest_me_cn "$cn"; then
+        # --- Preferred dev path: mkcert + trusted local CA + wildcard certs for localtest.me ---
+        ensure_mkcert_installed
+
+        # Install mkcert root CA into host trust stores (idempotent).
+        # This is what makes Chrome stop showing ERR_CERT_AUTHORITY_INVALID.
+        log "Ensuring mkcert local CA is installed/trusted (mkcert -install)..."
+        if ! mkcert -install >/dev/null 2>&1; then
+            warn "mkcert -install failed (trust store may not be updated). If you're using Windows Chrome, import rootCA.pem into Windows Trusted Roots."
+        fi
+
+        local crt_path="$cert_dir/localtest.me.crt"
+        local key_path="$cert_dir/localtest.me.key"
+        local site_cert_yml="$certs_out/localtest.me.yml"
+
+        if [[ ! -s "$crt_path" || ! -s "$key_path" || ! -s "$site_cert_yml" ]]; then
+            log "Generating/refreshing wildcard cert for *.localtest.me"
+            mkcert -cert-file "$crt_path" -key-file "$key_path" "localtest.me" "*.localtest.me" >/dev/null
+        else
+            log "Wildcard cert for *.localtest.me is already installed"
+            popd >/dev/null
+            log "End provisioning local"
+            return 0
+        fi
+
+        if [[ ! -f "$crt_path" || ! -f "$key_path" ]]; then
+            die "Expected mkcert outputs not found:" \
+            "   $crt_path" \
+            "   $key_path"
+        fi
+
+        if [[ ! -f "$site_cert_yml" ]]; then
+            write_site_cert_yml "$site_cert_yml" "$(basename "$crt_path")" "$(basename "$key_path")"
+        fi
+
+        # Trigger Traefik reload (touch an existing dyn file if present; otherwise touch the site cert file)
+        touch "$dyn_dir/certificates.yml" 2>/dev/null || touch "$site_cert_yml"
+
+        log "TLS ready (mkcert):"
+        log "  cert: $crt_path"
+        log "  key : $key_path"
+        log "  dyn : $site_cert_yml"
+        log "NOTE: If Chrome was already open, restart Chrome to pick up the newly trusted CA."
+    else
+        # --- Fallback path: pm-gen-sslcert (if you use non-localtest.me domains) ---
+        if ! command -v pm-gen-sslcert >/dev/null 2>&1; then
+            die "pm-gen-sslcert not found in PATH."
+        fi
+
+        local -a sslcert_args=()
+        if [[ "$val" == 1 || "$val" == yes ]]; then
+            sslcert_args+=( -f )
+        fi
+
+        log "Using pm-gen-sslcert for cn=$cn"
+        pm-gen-sslcert -o "$cert_dir" -cn "$cn" "${sslcert_args[@]}"
+
+        STEM="$(echo "$cn" | sed 's/\*/wildcard/g; s/[[:space:]]\+/_/g; s#/#_#g')"
+        FULLCHAIN="$cert_dir/$STEM.fullchain.crt"
+        KEY="$cert_dir/$STEM.key"
+
+        if [[ ! -f "$FULLCHAIN" || ! -f "$KEY" ]]; then
+            die "Expected cert outputs not found:" \
+            "   $FULLCHAIN" \
+            "   $KEY"
+        fi
+
+        site_cert_yml="$certs_out/$STEM.yml"
+        if [[ ! -f "$site_cert_yml" ]]; then
+            write_site_cert_yml "$site_cert_yml" "$(basename "$FULLCHAIN")" "$(basename "$KEY")"
+        fi
+
+        touch "$dyn_dir/certificates.yml" 2>/dev/null || touch "$site_cert_yml"
+
+        log "TLS ready:"
+        log "  cert: $FULLCHAIN"
+        log "  key : $KEY"
+        log "  dyn : $site_cert_yml"
+    fi
+
+    popd >/dev/null
+    log "End provisioning local"
+}
+
+
+pm_provision_db_platform() {
+    [[ "${DB_PLATFORM_CODE:-}" == "local" ]] \
+        || die "pm-provision-local database entrypoint requires DB_PLATFORM_CODE=local" 2
+
+    pm_compose_load_model
+    local service
+    service="$(pm_compose_service_for_role db)"
+    [[ -n "$service" ]] || die "pm-provision-local: no Compose db service was found" 2
+
+    env_init_set PM_DB_SERVICE "$service"
+    env_init_set DB_HOST "${DB_HOST:-$service}"
+    env_init_set DB_PORT "${DB_PORT:-5432}"
+    env_init_set DB_ADMIN_USER "${DB_ADMIN_USER:-${DB_USER:-}}"
+    env_init_set DB_ADMIN_PASSWORD "${DB_ADMIN_PASSWORD:-${DB_PASSWORD:-}}"
+
+    log INFO "pm-provision-local: database platform contract ready" \
+        "service=$service" "host=$DB_HOST" "port=$DB_PORT"
+}
+
+main() {
+    pm_provision_runtime_platform "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

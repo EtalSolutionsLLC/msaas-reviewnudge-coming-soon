@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+: "${PORTMASON_SHARE:=$SCRIPT_DIR}"
+export PORTMASON_SHARE
+
+# shellcheck disable=SC1091
+. "${PORTMASON_SHARE}/pm-helpers" --read-only
+
+pm_capabilities_registry() {
+    local out_var="${1:?output variable required}"
+    printf -v "$out_var" '%s' "${PM_CAPABILITY_REGISTRY:-${PORTMASON_SHARE}/catalog/portmason-capabilities.json}"
+}
+
+pm_capabilities_pattern_registry() {
+    local out_var="${1:?output variable required}"
+    local repo_root=""
+    repo_root="$(cd -- "${PORTMASON_SHARE}/../.." && pwd -P)"
+    printf -v "$out_var" '%s' "${PM_PATTERN_REGISTRY:-${repo_root}/sops/patterns/portmason-patterns.json}"
+}
+
+pm_capabilities_require_runtime() {
+    have jq || die "pm-capabilities requires jq" 2
+}
+
+pm_capabilities_validate() {
+    local registry="${1:?registry required}" pattern_registry="${2:?pattern registry required}"
+    jq -e '
+      .schemaVersion == "1.0"
+      and (.capabilities | type == "array" and length > 0)
+      and ([.capabilities[].id] | length == (unique | length))
+      and all(.capabilities[];
+        (.id | test("^pm-[a-z0-9-]+$"))
+        and (.name | type == "string" and length > 0)
+        and (.kind | type == "string" and length > 0)
+        and (.entity | type == "string" and length > 0)
+        and (.phase | type == "string" and length > 0)
+        and (.path | type == "string" and length > 0)
+        and (.summary | type == "string" and length > 20)
+        and (.inputs | type == "array")
+        and (.outputs | type == "array")
+        and (.patterns | type == "array" and length > 0)
+      )
+    ' "$registry" >/dev/null
+
+    jq -n -e --slurpfile caps "$registry" --slurpfile pats "$pattern_registry" '
+      ($pats[0].patterns | map(.id)) as $known
+      | all($caps[0].capabilities[].patterns[]; . as $id | $known | index($id) != null)
+    ' >/dev/null
+
+    log INFO "pm-capabilities: catalog valid" "file=$registry" \
+        "capabilities=$(jq '.capabilities | length' "$registry")"
+}
+
+pm_capabilities_usage() {
+    cat <<'USAGE'
+Usage:
+  pm-capabilities list [ENTITY]
+  pm-capabilities search QUERY
+  pm-capabilities show CAPABILITY-ID
+  pm-capabilities validate [--check-files]
+  pm-capabilities path
+USAGE
+}
+
+main() {
+    pm_capabilities_require_runtime
+    local registry="" pattern_registry="" command_name="${1:-list}"
+    pm_capabilities_registry registry
+    pm_capabilities_pattern_registry pattern_registry
+    [[ -r "$registry" ]] || die "pm-capabilities catalog not readable: $registry" 2
+    [[ -r "$pattern_registry" ]] || die "pm-capabilities pattern registry not readable: $pattern_registry" 2
+
+    case "$command_name" in
+        list)
+            local entity="${2:-}"
+            jq -r --arg entity "$entity" '
+              .capabilities[]
+              | select($entity == "" or .entity == $entity)
+              | [.id, .kind, .entity, .phase, .summary] | @tsv
+            ' "$registry"
+            ;;
+        search)
+            [[ $# -ge 2 ]] || die "pm-capabilities search requires a query" 2
+            local query="${*:2}"
+            jq -r --arg q "${query,,}" '
+              .capabilities[]
+              | select((([.id,.name,.kind,.entity,.phase,.path,.summary,(.inputs|join(" ")),(.outputs|join(" "))] | join(" ") | ascii_downcase) | contains($q)))
+              | [.id, .kind, .entity, .phase, .summary] | @tsv
+            ' "$registry"
+            ;;
+        show)
+            [[ $# -eq 2 ]] || die "pm-capabilities show requires one capability id" 2
+            jq -e --arg id "$2" '.capabilities[] | select(.id == $id)' "$registry" \
+                || die "unknown Portmason capability: $2" 2
+            ;;
+        validate)
+            pm_capabilities_validate "$registry" "$pattern_registry"
+            if [[ "${2:-}" == "--check-files" ]]; then
+                local repo_root path missing=0
+                repo_root="$(cd -- "${PORTMASON_SHARE}/../.." && pwd -P)"
+                while IFS= read -r path; do
+                    [[ -e "${repo_root}/${path}" ]] || {
+                        log ERROR "pm-capabilities: declared path missing" "path=$path"
+                        missing=1
+                    }
+                done < <(jq -r '.capabilities[].path' "$registry")
+                (( missing == 0 )) || return 2
+            fi
+            ;;
+        path)
+            printf '%s\n' "$registry" # PM-LINT-MACHINE-OUTPUT
+            ;;
+        -h|--help|help)
+            pm_capabilities_usage
+            ;;
+        *)
+            pm_capabilities_usage >&2
+            die "unknown pm-capabilities command: $command_name" 2
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm019() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local service start_line end_line block role="" scopes=""
+
+    pm_lint_is_compose_file "$path" || return 0
+
+    while IFS=$'\t' read -r service start_line end_line; do
+        [[ -n "$service" ]] || continue
+        block="$(pm_lint_compose_service_block "$file" "$start_line" "$end_line")"
+        role=""
+        scopes=""
+        pm_lint_compose_block_label_value role "$block" solutions.etal.service
+        case "$role" in
+            api|web|app|worker|jobs|cron|other) ;;
+            *) continue ;;
+        esac
+        pm_lint_compose_block_label_value scopes "$block" solutions.etal.config_scopes
+        [[ -n "$scopes" ]] && continue
+        pm_lint_report PM019 "$path" "$start_line" \
+            "Compose service '$service' uses broad role '$role' without explicit configuration scopes" \
+            "Add solutions.etal.config_scopes so PM Configuration Manager does not over-deliver variables or secrets."
+    done < <(pm_lint_compose_services_tsv "$file")
+}
+
+pm_lint_register_rule PM019 GUIDANCE file \
+    "Service-scoped configuration" \
+    "EPC A2.3; EPC A12.4; PM Configuration Manager contract" \
+    pm_lint_rule_pm019

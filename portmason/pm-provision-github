@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_provision_runtime_platform() {
+    log INFO "GitHub adapter provision step is a no-op" \
+        "reason=Pages is configured through repository settings and Actions"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+    if ! declare -F log >/dev/null 2>&1; then
+        . "${PORTMASON_SHARE}/pm-helpers" "$@"
+    fi
+    pm_provision_runtime_platform "$@"
+fi
