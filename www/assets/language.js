@@ -3,15 +3,14 @@ export const LANGUAGE_COOKIE = 'reviewnudge_language';
 
 export const SUPPORTED_LOCALES = Object.freeze([
   Object.freeze({ locale: 'en-US', language: 'en', direction: 'ltr' }),
+  Object.freeze({ locale: 'nl-NL', language: 'nl', direction: 'ltr' }),
   Object.freeze({ locale: 'zh-CN', language: 'zh', direction: 'ltr' }),
   Object.freeze({ locale: 'hi-IN', language: 'hi', direction: 'ltr' }),
   Object.freeze({ locale: 'es-ES', language: 'es', direction: 'ltr' }),
-  Object.freeze({ locale: 'ar', language: 'ar', direction: 'rtl' }),
   Object.freeze({ locale: 'fr-FR', language: 'fr', direction: 'ltr' }),
   Object.freeze({ locale: 'bn-BD', language: 'bn', direction: 'ltr' }),
   Object.freeze({ locale: 'pt-BR', language: 'pt', direction: 'ltr' }),
-  Object.freeze({ locale: 'id-ID', language: 'id', direction: 'ltr' }),
-  Object.freeze({ locale: 'ur-PK', language: 'ur', direction: 'rtl' })
+  Object.freeze({ locale: 'id-ID', language: 'id', direction: 'ltr' })
 ]);
 
 function matchLocale(candidate) {

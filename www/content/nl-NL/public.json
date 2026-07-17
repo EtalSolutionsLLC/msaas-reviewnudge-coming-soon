@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "title": "ReviewNudge wordt internationaal gelanceerd op 20 juli",
+    "description": "ReviewNudge wordt internationaal gelanceerd op maandag 20 juli. We nemen een paar extra dagen om de eerste versie toegankelijker te maken voor mensen van wie Engels niet de moedertaal is."
+  },
+  "accessibility": {
+    "skip": "Ga naar de hoofdinhoud",
+    "language": "Kies een taal",
+    "primaryNavigation": "Hoofdnavigatie",
+    "serviceFit": "Belangrijkste voordelen van ReviewNudge",
+    "productAssurances": "Zekerheden rond de lancering",
+    "previewMockup": "Voorbeeldweergave van ReviewNudge"
+  },
+  "brand": {
+    "homeLabel": "ReviewNudge-homepagina",
+    "markLabel": "ReviewNudge-beeldmerk",
+    "product": "ReviewNudge™",
+    "platform": "Gebouwd op Portmason™"
+  },
+  "nav": {
+    "preview": "Voorbeeld",
+    "updates": "Wat eraan komt",
+    "launchDate": "Lanceringsdatum",
+    "contact": "Contact",
+    "join": "20 juli"
+  },
+  "hero": {
+    "eyebrow": "Een korte update over de lancering",
+    "title": "ReviewNudge wordt maandag internationaal gelanceerd.",
+    "body": "We weten dat onze lanceringsdatum van 15 juli is verstreken. Toen de lanceringsdag aanbrak, beseften we dat mensen van wie Engels niet de moedertaal is meer verdienden dan een symbolisch gebaar. Daarom nemen we een paar extra dagen om de eerste versie van ReviewNudge echt internationaal te maken.",
+    "primary": "Bekijk wat eraan komt",
+    "secondary": "Lancering op 20 juli",
+    "offerStrong": "Eén overzichtelijke plek voor klantreviews.",
+    "offerBody": "Reviewlinks, opvolging, klantstatus en inzicht voor het team, zonder dat reviewbeheer een omvangrijk marketingplatformproject wordt.",
+    "fit1": "Installatie in drie klikken",
+    "fit2": "Opvolging bijhouden",
+    "fit3": "Klantenwerkruimte"
+  },
+  "launch": {
+    "kicker": "Internationale lancering",
+    "title": "Maandag 20 juli 2026",
+    "body": "Je hoeft niet lang meer te wachten. ReviewNudge wordt maandag internationaal gelanceerd, met een toegankelijkere ervaring voor mensen van wie Engels niet de moedertaal is.",
+    "messageTitle": "Wat is er veranderd?",
+    "messageItem1": "Onze oorspronkelijke lanceringsdatum van 15 juli is verstreken.",
+    "messageItem2": "We gebruiken de extra dagen om de lancering betekenisvol te maken voor mensen die andere talen dan Engels gebruiken.",
+    "messageItem3": "De internationale toegang opent op maandag 20 juli.",
+    "assurance1": "Een inclusievere eerste versie",
+    "assurance2": "Internationale lancering op 20 juli"
+  },
+  "updates": {
+    "label": "Wat eraan komt",
+    "step1Number": "01",
+    "step1Title": "Vragen",
+    "step1Body": "Stuur reviewverzoeken vanuit een overzichtelijke werkruimte terwijl de klantervaring nog vers in het geheugen ligt.",
+    "step2Number": "02",
+    "step2Title": "Volgen",
+    "step2Body": "Bekijk welke klanten zijn benaderd, welke verzoeken aandacht nodig hebben en welke opvolging als volgende gepland staat.",
+    "step3Number": "03",
+    "step3Title": "Groeien",
+    "step3Body": "Maak het reviewproces consistenter zonder de dag onnodig complex te maken."
+  },
+  "preview": {
+    "kicker": "Productvoorbeeld",
+    "title": "Een overzichtelijkere manier om reviewverzoeken te beheren.",
+    "body": "ReviewNudge draait om één eenvoudige werkruimte voor reviewlinks, klantstatus, opvolging en inzicht voor het team.",
+    "cta": "Lancering op 20 juli",
+    "toolbar": "Reviewwerkruimte",
+    "readyCount": "3 gereed",
+    "metric1Label": "Verzoeken",
+    "metric1Value": "24",
+    "metric2Label": "Opvolgingen",
+    "metric2Value": "8",
+    "metric3Label": "Reviews",
+    "metric3Value": "11",
+    "sample1Initials": "HS",
+    "sample1Name": "Klant voor dienstverlening aan huis",
+    "sample1Detail": "Gereed voor reviewverzoek",
+    "sample1Status": "Gereed",
+    "sample2Initials": "LP",
+    "sample2Name": "Lokale zakelijke klant",
+    "sample2Detail": "Opvolging gepland",
+    "sample2Status": "Verzonden",
+    "sample3Initials": "ST",
+    "sample3Name": "Klant van een klein team",
+    "sample3Detail": "Review voltooid",
+    "sample3Status": "Beoordeeld",
+    "reminderTitle": "Volgende herinnering gereed",
+    "reminderBody": "Houd de opvolging gaande zonder het overzicht te verliezen."
+  },
+  "footer": {
+    "launch": "© 2026 Et al Solutions LLC. ReviewNudge™ en Portmason™ zijn merken van Et al Solutions LLC."
+  }
+}

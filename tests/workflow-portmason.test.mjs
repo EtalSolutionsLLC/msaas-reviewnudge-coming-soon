@@ -2,11 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const workflow = readFileSync('.github/workflows/gen-site-html.yml', 'utf8');
+const workflow = readFileSync('.github/workflows/setup-maintain-deploy-via-portmason.yml', 'utf8');
 
 test('GitHub Pages generation enters the selected deployment root and delegates to pm-setup', () => {
-  assert.match(workflow, /cd "\$\{DEPLOY_ROOT\}"/);
-  assert.match(workflow, /PM_DEFER_SITE_BUILD_FINALIZE=true/);
+  assert.match(workflow, /working-directory: \$\{\{ env\.DEPLOY_DIR \}\}/);
   assert.match(workflow, /\bpm-setup\b/);
   assert.doesNotMatch(workflow, /\bpm-process-site-partials\b/);
 });
@@ -16,12 +15,12 @@ test('workflow pins and verifies the shared Portmason tooling revision', () => {
   assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
   assert.match(workflow, /repository:\s*domer6811\/ops-and-sops/);
   assert.match(workflow, /ops\/portmason/);
-  assert.match(workflow, /actual_tooling_ref="\$\(git -C "\$\{GITHUB_WORKSPACE\}\/ops-and-sops" rev-parse HEAD\)"/);
-  assert.match(workflow, /pm-version validate/);
+  assert.match(workflow, /ref: \$\{\{ steps\.portmason-ref\.outputs\.sha \}\}/);
+  assert.match(workflow, /PORTMASON_SHARE/);
 });
 
-test('workflow rejects a project-local pm-version implementation', () => {
-  assert.match(workflow, /if \[\[ -e bin\/pm-version \]\]/);
-  assert.match(workflow, /Project-local bin\/pm-version must not exist/);
-  assert.match(workflow, /expected_pm_version="\$\{GITHUB_WORKSPACE\}\/ops-and-sops\/ops\/portmason\/pm-version"/);
+test('workflow uses the pinned shared Portmason implementation', () => {
+  assert.match(workflow, /portmason_share="\$\{GITHUB_WORKSPACE\}\/\$\{OPS_DIR\}\/ops\/portmason"/);
+  assert.match(workflow, /"\$\{PORTMASON_SHARE\}\/pm-setup"/);
+  assert.doesNotMatch(workflow, /bin\/pm-version/);
 });
