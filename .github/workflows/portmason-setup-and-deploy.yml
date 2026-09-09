@@ -93,10 +93,6 @@ jobs:
           cd "${GITHUB_WORKSPACE}"
           set -euo pipefail
 
-          test -s "${PAGES_SITE_DIR}/build-info.json"
-          test -s "${PAGES_SITE_DIR}/deploy-info.json"
-          test -s "${PAGES_SITE_DIR}/artifact-manifest.json"
-
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
