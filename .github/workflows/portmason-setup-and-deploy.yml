@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
 
           [[ -n "${ETALSOLUTIONSLLC_OPS_AND_SOPS_READ_TOKEN}" ]] || {
-            echo "::error::ETALSOLUTIONSLLC_OPS_AND_SOPS_READ_TOKEN is required to read private domer6811/ops-and-sops"
+            echo "::error::ETALSOLUTIONSLLC_OPS_AND_SOPS_READ_TOKEN is required to read private EtalSolutionsLLC/ops-and-sops"
             exit 1
           }
 
