@@ -3,15 +3,38 @@ set -euo pipefail
 
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
 . "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-db" "$@" ###we have to source this file out of sequence because it contains functions we don't want to replicate
 
 # Usage: pm-ensure-external-networks [compose-file]
-: "${COMPOSE_FILE:="docker-compose.yml"}"
-export COMPOSE_FILE
+if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
+  PM_COMPOSE_FILE="$1"
+fi
+
+pm_compose_init_command
+pm_compose_control_file COMPOSE_FILE
+export PM_COMPOSE_FILE COMPOSE_FILE
 
 echo "Using compose file: $COMPOSE_FILE"
 
+compose_json="$("${PM_COMPOSE_CMD[@]}" config \
+  --no-interpolate \
+  --no-env-resolution \
+  --format json 2>&1)" || {
+  printf 'ERROR: docker compose config failed for %s\n' "$COMPOSE_FILE" >&2
+  printf '%s\n' "$compose_json" \
+    | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' >&2
+  return 1 2>/dev/null || exit 1
+}
+
+if ! jq -e '.networks // {}' >/dev/null 2>&1 <<<"$compose_json"; then
+  printf 'ERROR: docker compose config did not produce valid JSON for %s\n' "$COMPOSE_FILE" >&2
+  printf '%s\n' "$compose_json" \
+    | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 mapfile -t networks < <(
-  docker compose config --format json \
+  printf '%s\n' "$compose_json" \
   | jq -r '
       .networks // {}
       | to_entries[]
@@ -29,9 +52,16 @@ mapfile -t networks < <(
   | sort -u
 )
 
+if ((${#networks[@]} > 0)); then
+  mapfile -t networks < <(
+    printf '%s\n' "${networks[@]}" \
+      | "${PORTMASON_SHARE}/pm-util-render-env" -
+  )
+fi
+
 if ((${#networks[@]} == 0)); then
   echo "No external networks defined in $COMPOSE_FILE"
-  return 0
+  return 0 2>/dev/null || exit 0
 fi
 
 echo "External networks found in compose config:"

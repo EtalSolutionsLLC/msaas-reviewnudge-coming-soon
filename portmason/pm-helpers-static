@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers-web"
+
 static_site_dir() {
   printf '%s' "${STATIC_SITE_DIR:-${SITE_DIR:-$PWD}}"
 }
@@ -10,7 +13,95 @@ static_build_dir() {
 }
 
 static_generate_config() {
-  local out="${1:-$(static_build_dir)/config.generated.json}"
-  "${PORTMASON_SHARE}/pm-util-render-env" --json --out "$out" "${ENV_FILE}"
-  log INFO "Generated static browser config: $out"
+#  local out="${1:-$(static_build_dir)/config.generated.json}"
+#  "${PORTMASON_SHARE}/pm-util-render-env" --json --out "$out" "${ENV_FILE}"
+#  log INFO "Generated static browser config: $out"
+  :
+}
+
+pm-publish-finalize-static() {
+  local secret_path=""
+  local api_token=""
+  local publish_url="${APP_URL:?APP_URL is required to finalize a static publication}"
+  local publish_host=""
+  local request_body=""
+  local response=""
+  local errors=""
+
+  : "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID is required to finalize a static publication}"
+  have curl || {
+    die "curl is required to purge the Cloudflare cache" 2
+    return 2
+  }
+  have jq || {
+    die "jq is required to purge the Cloudflare cache" 2
+    return 2
+  }
+
+  secret_path="$(get_secret_path_by_ref CLOUDFLARE_API_TOKEN)" || {
+    die "SECRET_PATHS must map CLOUDFLARE_API_TOKEN to github:CLOUDFLARE_API_TOKEN" 2
+    return 2
+  }
+  api_token="$(get_secret "$secret_path")" || return $?
+
+  [[ "$publish_url" =~ ^https?://[^/]+/? ]] || {
+    die "APP_URL must be an absolute HTTP(S) URL: ${publish_url}" 2
+    return 2
+  }
+  publish_host="${publish_url#*://}"
+  publish_host="${publish_host%%/*}"
+  publish_host="${publish_host%%:*}"
+  [[ -n "$publish_host" ]] || {
+    die "Unable to derive the published hostname from APP_URL: ${publish_url}" 2
+    return 2
+  }
+
+  request_body="$(jq --null-input --compact-output \
+    --arg host "$publish_host" \
+    '{hosts: [$host]}')"
+
+  response="$(
+    curl --fail-with-body --silent --show-error \
+      --request POST \
+      "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+      --header "Authorization: Bearer ${api_token}" \
+      --header "Content-Type: application/json" \
+      --data "$request_body"
+  )" || {
+    die "Cloudflare cache purge request failed for ${publish_host}" 1
+    return 1
+  }
+
+  if ! jq --exit-status '.success == true' >/dev/null <<<"$response"; then
+    errors="$(jq --compact-output '.errors // []' <<<"$response" 2>/dev/null || printf '[]')"
+    die "Cloudflare rejected the cache purge for ${publish_host}: ${errors}" 1
+    return 1
+  fi
+
+  log INFO "static publication finalized" \
+    "provider=cloudflare" \
+    "host=${publish_host}"
+}
+
+static_prepare_publication_collections() {
+  local site_dir runtime_source runtime_target
+
+  site_dir="$(static_site_dir)"
+  [[ -d "$site_dir" ]] || die "Static site directory is not available: $site_dir" 1
+  [[ -x "${PORTMASON_SHARE}/pm-index-publication-collections" ]] \
+    || die "Portmason publication indexer is unavailable or not executable" 1
+
+  runtime_source="${PORTMASON_SHARE}/web/pm-collections.js"
+  runtime_target="${site_dir}/collections/_system/pm-collections.js"
+  if [[ -d "${site_dir}/collections/_system" ]]; then
+    [[ -r "$runtime_source" ]] \
+      || die "Portmason browser collection runtime is unavailable: $runtime_source" 1
+    if [[ ! -r "$runtime_target" ]] || ! cmp -s -- "$runtime_source" "$runtime_target"; then
+      install -m 0644 -- "$runtime_source" "$runtime_target"
+    fi
+  fi
+
+  log INFO "pm-helpers-static: indexing publication collection files" \
+    "site_dir=$site_dir"
+  "${PORTMASON_SHARE}/pm-index-publication-collections" --site-dir "$site_dir"
 }

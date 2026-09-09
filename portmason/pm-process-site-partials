@@ -1,72 +1,399 @@
 #!/usr/bin/env python3
+
 import os
 import re
+import shlex
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
-SITE_DIR = Path(os.environ.get("SITE_DIR", Path.cwd())).resolve()
-INDEX_FILE = SITE_DIR / "index.html"
-PARTIALS_DIR = SITE_DIR / "partials"
-HOOKS_DIR = PARTIALS_DIR / "hooks"
+
+ROOT = Path.cwd().resolve()
+
+EXCLUDED_DIRS = {
+    "logs",
+    "capture",
+    "deploy",
+    "partials",
+}
 
 BLOCK_RE = re.compile(
-    r"<!--\s*PM:([A-Za-z0-9_-]+)\s*-->(.*?)<!--\s*/PM:\1\s*-->",
+    r"<!--\s*PM:([A-Za-z0-9_-]+)\s*-->"
+    r"(.*?)"
+    r"<!--\s*/PM:\1\s*-->",
     re.DOTALL,
 )
+
+ENV_TOKEN_RE = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+    r"|"
+    r"\{\{ENV:([A-Za-z_][A-Za-z0-9_]*)\}\}"
+    r"|"
+    r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}"
+)
+
 
 def normalize_tag(tag: str) -> str:
     return tag.strip().lower()
 
-def is_executable(path: Path) -> bool:
-    return path.is_file() and bool(path.stat().st_mode & stat.S_IXUSR)
 
-def render_tag(tag: str) -> str:
+def is_executable(path: Path) -> bool:
+    return (
+        path.is_file()
+        and bool(path.stat().st_mode & stat.S_IXUSR)
+    )
+
+
+def find_env_file() -> Path | None:
+    for directory in (ROOT, *ROOT.parents):
+        candidate = directory / ".env.generated"
+
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
+def parse_env_file(path: Path | None) -> dict[str, str]:
+    values = dict(os.environ)
+
+    if path is None:
+        return values
+
+    for raw_line in path.read_text(
+        encoding="utf-8"
+    ).splitlines():
+
+        line = raw_line.strip()
+
+        if (
+            not line
+            or line.startswith("#")
+            or "=" not in line
+        ):
+            continue
+
+        key, raw_value = line.split("=", 1)
+
+        key = key.strip()
+
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*",
+            key,
+        ):
+            continue
+
+        raw_value = raw_value.strip()
+
+        try:
+            parsed = shlex.split(
+                raw_value,
+                comments=False,
+                posix=True,
+            )
+
+            value = (
+                parsed[0]
+                if len(parsed) == 1
+                else raw_value
+            )
+
+        except ValueError:
+            value = raw_value
+
+        values[key] = value
+
+    return values
+
+
+ENV_FILE = find_env_file()
+ENV_VALUES = parse_env_file(ENV_FILE)
+
+
+def excluded(path: Path) -> bool:
+    try:
+        relative = path.relative_to(ROOT)
+    except ValueError:
+        return True
+
+    return any(
+        part in EXCLUDED_DIRS
+        for part in relative.parts
+    )
+
+
+def html_files() -> list[Path]:
+    return sorted(
+        path
+        for path in ROOT.rglob("*.html")
+        if (
+            path.is_file()
+            and not excluded(path)
+            and not is_derived_localized_output(path)
+        )
+    )
+
+
+def site_root_for(
+    page: Path,
+) -> Path | None:
+
+    for directory in (
+        page.parent,
+        *page.parents,
+    ):
+        if directory == ROOT.parent:
+            break
+
+        if (
+            directory
+            / "partials"
+        ).is_dir():
+            return directory
+
+        if directory == ROOT:
+            break
+
+    return None
+
+
+def is_derived_localized_output(page: Path) -> bool:
+    site_root = site_root_for(page)
+
+    if site_root is None:
+        return False
+
+    template = site_root / "site.template.html"
+    content_locales = site_root.parent / "content" / "locales.json"
+
+    if not template.is_file() or not content_locales.is_file():
+        return False
+
+    if page == site_root / "index.html":
+        return True
+
+    localized_root = site_root / "locales"
+    try:
+        relative = page.relative_to(localized_root)
+    except ValueError:
+        return False
+
+    return len(relative.parts) == 2 and relative.parts[1] == "index.html"
+
+
+def render_tag(
+    site_root: Path,
+    tag: str,
+) -> str:
+
     normalized = normalize_tag(tag)
-    hook = HOOKS_DIR / normalized
-    partial = PARTIALS_DIR / f"{normalized}.html"
+
+    partials_dir = (
+        site_root
+        / "partials"
+    )
+
+    hook = (
+        partials_dir
+        / "hooks"
+        / normalized
+    )
+
+    partial = (
+        partials_dir
+        / f"{normalized}.html"
+    )
 
     if is_executable(hook):
+
         result = subprocess.run(
             [str(hook)],
-            cwd=str(SITE_DIR),
+            cwd=str(site_root),
+            env=dict(ENV_VALUES),
             text=True,
             stdout=subprocess.PIPE,
             stderr=None,
             check=False,
         )
+
         if result.returncode != 0:
-            raise RuntimeError(f"Hook failed for PM:{tag}: {hook} exited {result.returncode}")
-        return result.stdout.rstrip() + "\n"
+            raise RuntimeError(
+                f"Hook failed for PM:{tag}: "
+                f"{hook} exited "
+                f"{result.returncode}"
+            )
+
+        return (
+            result.stdout.rstrip()
+            + "\n"
+        )
 
     if partial.is_file():
-        return partial.read_text(encoding="utf-8").rstrip() + "\n"
+        return (
+            partial.read_text(
+                encoding="utf-8"
+            ).rstrip()
+            + "\n"
+        )
 
-    raise FileNotFoundError(f"No hook or partial found for PM:{tag}; expected {hook} or {partial}")
+    raise FileNotFoundError(
+        f"No hook or partial found "
+        f"for PM:{tag}; expected "
+        f"{hook} or {partial}"
+    )
 
-def replace_block(match: re.Match) -> str:
-    tag = match.group(1)
-    rendered = render_tag(tag)
-    return f"<!-- PM:{tag} -->\n{rendered}<!-- /PM:{tag} -->"
+
+def expand_partials(
+    page: Path,
+    source: str,
+) -> tuple[str, int]:
+
+    site_root = site_root_for(page)
+
+    if site_root is None:
+        return source, 0
+
+    def replace_block(
+        match: re.Match,
+    ) -> str:
+
+        tag = match.group(1)
+
+        rendered = render_tag(
+            site_root,
+            tag,
+        )
+
+        return (
+            f"<!-- PM:{tag} -->\n"
+            f"{rendered}"
+            f"<!-- /PM:{tag} -->"
+        )
+
+    return BLOCK_RE.subn(
+        replace_block,
+        source,
+    )
+
+
+def substitute_env_tokens(
+    source: str,
+) -> tuple[str, int]:
+
+    count = 0
+
+    def replace_token(
+        match: re.Match,
+    ) -> str:
+
+        nonlocal count
+
+        key = (
+            match.group(1)
+            or match.group(2)
+            or match.group(3)
+        )
+
+        if key not in ENV_VALUES:
+            return match.group(0)
+
+        count += 1
+
+        return ENV_VALUES[key]
+
+    return ENV_TOKEN_RE.sub(
+        replace_token,
+        source,
+    ), count
+
 
 def main() -> int:
-    if not INDEX_FILE.is_file():
-        print(f"ERROR: index.html not found: {INDEX_FILE}", file=sys.stderr)
-        return 1
 
-    source = INDEX_FILE.read_text(encoding="utf-8")
-    rendered, count = BLOCK_RE.subn(replace_block, source)
+    pages = html_files()
 
-    if count == 0:
-        print(f"No PM partial blocks found in {INDEX_FILE}; nothing to process")
+    if not pages:
+        print(
+            f"No HTML files found "
+            f"beneath {ROOT}; "
+            f"nothing to process"
+        )
+
         return 0
 
-    INDEX_FILE.write_text(rendered, encoding="utf-8")
-    os.chmod(INDEX_FILE, 0o644)
+    total_partials = 0
+    total_tokens = 0
+    changed_files = 0
 
-    print(f"Processed {count} partial block(s) in {INDEX_FILE}")
+    for page in pages:
+
+        source = page.read_text(
+            encoding="utf-8"
+        )
+
+        rendered, partial_count = (
+            expand_partials(
+                page,
+                source,
+            )
+        )
+
+        rendered, token_count = (
+            substitute_env_tokens(
+                rendered
+            )
+        )
+
+        total_partials += (
+            partial_count
+        )
+
+        total_tokens += (
+            token_count
+        )
+
+        if rendered == source:
+            continue
+
+        page.write_text(
+            rendered,
+            encoding="utf-8",
+        )
+
+        os.chmod(
+            page,
+            0o644,
+        )
+
+        changed_files += 1
+
+        print(
+            f"Processed "
+            f"{page.relative_to(ROOT)}: "
+            f"partials={partial_count} "
+            f"env_tokens={token_count}"
+        )
+
+    env_description = (
+        str(ENV_FILE)
+        if ENV_FILE
+        else
+        "<not found; "
+        "process environment only>"
+    )
+
+    print(
+        f"Processed {len(pages)} "
+        f"HTML file(s) beneath "
+        f"{ROOT}; "
+        f"changed={changed_files} "
+        f"partials={total_partials} "
+        f"env_tokens={total_tokens} "
+        f"env_file="
+        f"{env_description}"
+    )
+
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

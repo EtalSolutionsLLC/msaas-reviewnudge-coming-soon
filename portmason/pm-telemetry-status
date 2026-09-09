@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers-telemetry" --read-only
+
+[[ "${TELEMETRY_STORE_PLATFORM_CODE:-}" == local ]] \
+    || die "pm-telemetry-status currently supports the local adapter" 2
+
+pm_telemetry_load_compose_model
+pm_telemetry_compose_service_name store_service store
+pm_telemetry_compose_service_name collector_service collector
+services=("$store_service" "$collector_service")
+if telemetry_is_true "${TELEMETRY_DASHBOARD_ENABLED:-false}"; then
+    pm_telemetry_compose_service_name dashboard_service dashboard
+    services+=("$dashboard_service")
+fi
+pm_telemetry_local_compose ps "${services[@]}"

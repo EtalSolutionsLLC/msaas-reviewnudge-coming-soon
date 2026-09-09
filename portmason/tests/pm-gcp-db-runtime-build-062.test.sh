@@ -64,7 +64,7 @@ grep -Fq -- '--tier db-f1-micro' "$TRACE"
 pm_gcp_deploy_cloud_run_service web web image:062
 
 grep -Fq -- '--add-cloudsql-instances project:us-central1:stack-postgres' "$TRACE"
-grep -Fq -- '--set-secrets DB_PASSWORD=projects/project/secrets/stack-db-password:latest' "$TRACE"
+grep -Fq -- '--set-secrets DB_PASSWORD=stack-db-password:latest' "$TRACE"
 grep -Fq -- '--env-vars-file' "$TRACE"
 grep -Fq -- '--port 3080' "$TRACE"
 grep -Fq 'BLOCKED_SHORTENER_DOMAINS: "bit.ly,tinyurl.com"' "$TRACE"

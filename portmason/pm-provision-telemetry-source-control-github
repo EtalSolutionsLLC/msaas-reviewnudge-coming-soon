@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+: "${TELEMETRY_SOURCE_CONTROL_REPOSITORY:?TELEMETRY_SOURCE_CONTROL_REPOSITORY required}"
+: "${TELEMETRY_SOURCE_CONTROL_TOKEN:?TELEMETRY_SOURCE_CONTROL_TOKEN required}"
+: "${TELEMETRY_SOURCE_CONTROL_WEBHOOK_SECRET:?TELEMETRY_SOURCE_CONTROL_WEBHOOK_SECRET required}"
+: "${TELEMETRY_SOURCE_CONTROL_WEBHOOK_URL:?TELEMETRY_SOURCE_CONTROL_WEBHOOK_URL required}"
+log INFO "GitHub source-control telemetry provisioning contract ready" \
+    "repository=${TELEMETRY_SOURCE_CONTROL_REPOSITORY}" \
+    "webhook=${TELEMETRY_SOURCE_CONTROL_WEBHOOK_URL}"

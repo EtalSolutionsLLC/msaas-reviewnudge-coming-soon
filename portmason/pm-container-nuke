@@ -9,7 +9,8 @@ export CUR_SCRIPT
 
 # pm-container-nuke
 # Default: FULLY EXECUTE and remove ONLY artifacts for the current STACK.
-# Use --all to nuke ALL Docker artifacts on the machine (dangerous, requires confirmation).
+# Use --all to target Docker artifacts across the machine (dangerous, requires confirmation).
+# Protected data volumes remain preserved in every mode.
 #
 # STACK detection:
 #   1) If --stack <name> is provided, use it.
@@ -39,7 +40,7 @@ export CUR_SCRIPT
 #   --stack <name>   Override detected STACK
 #   --dry-run        Print the plan, do not delete
 #   --images <mode>  Image selection mode in scoped mode (default: smart)
-#   --all            Nuke ALL Docker artifacts on the machine (containers, networks, volumes, images)
+#   --all            Target Docker artifacts across the machine; protected volumes remain
 #   -h|--help        Show help
 #
 # Notes:
@@ -50,6 +51,11 @@ export CUR_SCRIPT
 
 DO_DRYRUN="false"
 IMAGES_MODE="smart"
+volumes_to_remove=""
+volumes_to_preserve=""
+VOLUME_DECISION=""
+VOLUME_REASON=""
+declare -A VOLUME_REASONS=()
 
 # Helpers
 unique () { awk 'BEGIN{RS="\n";FS=" "} { if (!seen[$1]++) print $1 }'; }
@@ -95,6 +101,104 @@ volumes_from_containers () {
   done <<< "${cids}"
 }
 
+volume_owner_containers () {
+  local volume_name="${1:?volume name required}"
+  docker ps -aq --filter "volume=${volume_name}" 2>/dev/null || true
+}
+
+container_label () {
+  local container_id="${1:?container id required}"
+  local label_name="${2:?label name required}"
+  local value
+  value="$(docker inspect -f "{{ index .Config.Labels \"${label_name}\" }}" \
+    "$container_id" 2>/dev/null || true)"
+  [[ "$value" == "<no value>" ]] && value=""
+  printf '%s' "$value"
+}
+
+container_display_name () {
+  local container_id="${1:?container id required}"
+  local name
+  name="$(docker inspect -f '{{.Name}}' "$container_id" 2>/dev/null \
+    | sed 's#^/##' || true)"
+  printf '%s' "${name:-$container_id}"
+}
+
+volume_removal_decision () {
+  local volume_name="${1:?volume name required}"
+  local container_id owner_name service_tier data_lifecycle
+  local -a owners=()
+  mapfile -t owners < <(volume_owner_containers "$volume_name")
+
+  VOLUME_DECISION="preserve"
+  VOLUME_REASON=""
+  if ((${#owners[@]} == 0)); then
+    VOLUME_REASON="no owning container metadata"
+    return 0
+  fi
+
+  for container_id in "${owners[@]}"; do
+    [[ -n "$container_id" ]] || continue
+    owner_name="$(container_display_name "$container_id")"
+    service_tier="$(container_label "$container_id" \
+      solutions.etal.service_tier)"
+    data_lifecycle="$(container_label "$container_id" \
+      solutions.etal.data_lifecycle)"
+
+    if [[ -z "$service_tier" || -z "$data_lifecycle" ]]; then
+      VOLUME_REASON="owner ${owner_name} has incomplete Portmason metadata"
+      return 0
+    fi
+    if [[ "$service_tier" == "persistence" ]]; then
+      VOLUME_REASON="owner ${owner_name} is in the persistence tier"
+      return 0
+    fi
+    case "$data_lifecycle" in
+      persistent|archival)
+        VOLUME_REASON="owner ${owner_name} declares data_lifecycle=${data_lifecycle}"
+        return 0
+        ;;
+      transient) : ;;
+      *)
+        VOLUME_REASON="owner ${owner_name} has unknown data_lifecycle=${data_lifecycle}"
+        return 0
+        ;;
+    esac
+    case "$service_tier" in
+      edge|frontend|internal) : ;;
+      *)
+        VOLUME_REASON="owner ${owner_name} has unknown service_tier=${service_tier}"
+        return 0
+        ;;
+    esac
+  done
+
+  VOLUME_DECISION="remove"
+  VOLUME_REASON="every owner explicitly declares transient data"
+}
+
+classify_candidate_volumes () {
+  local candidates="${1:-}"
+  local volume_name
+  volumes_to_remove=""
+  volumes_to_preserve=""
+  VOLUME_REASONS=()
+
+  while IFS= read -r volume_name; do
+    [[ -n "$volume_name" ]] || continue
+    volume_removal_decision "$volume_name"
+    VOLUME_REASONS["$volume_name"]="$VOLUME_REASON"
+    if [[ "$VOLUME_DECISION" == "remove" ]]; then
+      volumes_to_remove+="${volume_name}"$'\n'
+    else
+      volumes_to_preserve+="${volume_name}"$'\n'
+    fi
+  done <<< "$candidates"
+
+  volumes_to_remove="${volumes_to_remove%$'\n'}"
+  volumes_to_preserve="${volumes_to_preserve%$'\n'}"
+}
+
 print_plan () {
   echo "=== PLAN ==="
   if [[ "${NUKE_ALL}" == 1 ]]; then
@@ -124,12 +228,21 @@ print_plan () {
   else
     echo "  (none)"
   fi
-  echo "Volumes:"
-  if [[ -n "${volumes}" ]]; then
+  echo "Volumes to remove:"
+  if [[ -n "${volumes_to_remove}" ]]; then
     while IFS= read -r name; do
       [[ -z "$name" ]] && continue
-      echo "  - ${name}"
-    done <<< "${volumes}"
+      echo "  - ${name} (${VOLUME_REASONS[$name]})"
+    done <<< "${volumes_to_remove}"
+  else
+    echo "  (none)"
+  fi
+  echo "Protected volumes:"
+  if [[ -n "${volumes_to_preserve}" ]]; then
+    while IFS= read -r name; do
+      [[ -z "$name" ]] && continue
+      echo "  - ${name} (${VOLUME_REASONS[$name]})"
+    done <<< "${volumes_to_preserve}"
   else
     echo "  (none)"
   fi
@@ -151,7 +264,8 @@ usage () {
 pm-container-nuke
 
 Default: fully execute and remove ONLY artifacts for the detected STACK.
-Use --all to nuke EVERYTHING Docker on this machine (dangerous).
+Use --all to target Docker artifacts across the machine (dangerous).
+Persistent, archival, unclassified, and otherwise protected volumes remain.
 
 STACK detection (in order):
   1) --stack <name>
@@ -166,7 +280,7 @@ Options:
   --stack <name>      Override detected STACK
   --dry-run           Print the plan only; do not delete
   --images <mode>     Image selection in scoped mode (smart|associated|labeled|tagged|none). Default: smart
-  --all               Nuke all Docker artifacts (containers, networks, volumes, images)
+  --all               Target all Docker artifacts; protected volumes remain
   -h, --help          Show this help
 USAGE
 }
@@ -181,7 +295,7 @@ main() {
   esac
 
   if [[ "${NUKE_ALL}" == 1 ]]; then
-    warn "GLOBAL NUKE (--all): This will delete ALL Docker artifacts on this machine."
+    warn "GLOBAL NUKE (--all): This targets Docker artifacts across this machine; protected volumes remain."
   else
     info "Scoped mode: targeting STACK='${STACK_VAL}' (images mode: ${IMAGES_MODE})"
   fi
@@ -333,6 +447,9 @@ main() {
     fi
   fi
 
+  # Volume ownership labels disappear with their containers, so classify the
+  # complete candidate set before deleting anything.
+  classify_candidate_volumes "$volumes"
   print_plan
 
   # Confirm if doing a GLOBAL NUKE (only when not a dry-run)
@@ -373,14 +490,18 @@ main() {
   fi
 
   # 3) Volumes
-  if [[ -n "${volumes}" ]]; then
-    info "Removing volumes..."
+  if [[ -n "${volumes_to_remove}" ]]; then
+    info "Removing explicitly transient volumes..."
     while IFS= read -r name; do
       [[ -z "$name" ]] && continue
       docker volume rm -f "$name" || true
-    done <<< "${volumes}"
+    done <<< "${volumes_to_remove}"
   else
-    info "No volumes to remove."
+    info "No explicitly transient volumes to remove."
+  fi
+  if [[ -n "${volumes_to_preserve}" ]]; then
+    info "Protected volumes were preserved" \
+      "count=$(wc -l <<<"$volumes_to_preserve" | tr -d '[:space:]')"
   fi
 
   # 4) Images
@@ -409,8 +530,10 @@ main() {
   exit 0
 }
 
-pm_setup_arg NUKE_ALL "--all" export
-pm_setup_arg STACK_FROM_ARG "-s|--stack" needs_value export
-pm_commit_args "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  pm_setup_arg NUKE_ALL "--all" export
+  pm_setup_arg STACK_FROM_ARG "-s|--stack" needs_value export
+  pm_commit_args "$@"
 
-main "$@"
+  main "$@"
+fi

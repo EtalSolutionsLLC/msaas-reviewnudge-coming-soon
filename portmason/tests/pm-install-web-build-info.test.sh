@@ -41,7 +41,7 @@ cat > "$materialize_fixture/public/index.html" <<'HTML'
 HTML
 printf '1.2.3\n' > "$materialize_fixture/RELEASE_VERSION"
 printf '099\n' > "$materialize_fixture/BUILD_NUMBER"
-printf '099\n' > "$materialize_fixture/VERSION"
+printf '098\n' > "$materialize_fixture/VERSION"
 
 cat > "$materialize_fixture/fake-bin/pm-version" <<'STUB'
 #!/usr/bin/env bash
@@ -54,7 +54,6 @@ set -euo pipefail
 
 release="$(tr -d '[:space:]' < "${PM_VERSION_ROOT}/RELEASE_VERSION")"
 build="$(tr -d '[:space:]' < "${PM_VERSION_ROOT}/BUILD_NUMBER")"
-[[ "$(tr -d '[:space:]' < "${PM_VERSION_ROOT}/VERSION")" == "$build" ]] || exit 85
 
 if [[ "${1:-}" == current && "${2:-}" == --json ]]; then
   printf '{"releaseVersion":"%s","buildNumber":"%s"}\n' "$release" "$build"

@@ -37,4 +37,24 @@ for file in \
     bash -n "$source_dir/$file"
 done
 
+PORTMASON_SHARE="$source_dir" bash -c '
+    set -euo pipefail
+    export PORTMASON_SHARE
+    . "$PORTMASON_SHARE/pm-helpers" --minimal
+    . "$PORTMASON_SHARE/pm-helpers-db"
+    declare -F pm_db_bootstrap_helpers >/dev/null
+
+    bash -c '"'"'
+        set -euo pipefail
+        . "$PORTMASON_SHARE/pm-helpers" --minimal
+        . "$PORTMASON_SHARE/pm-helpers-db"
+        declare -F pm_db_bootstrap_helpers >/dev/null
+        declare -F pm_config_manager_prepare_base_registry >/dev/null
+    '"'"'
+'
+
+! grep -R -E '^export __PM_[A-Z0-9_]+_LOADED$' \
+    "$source_dir"/pm-config-manager \
+    "$source_dir"/pm-helpers-*
+
 printf 'Portmason database bootstrap and lifecycle-order tests passed.\n'

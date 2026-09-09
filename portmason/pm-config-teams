@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_teams() {
+    if ! declare -F pm_teams_validate_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-teams"
+    fi
+    pm_teams_validate_config
+    local scopes='pm-support-channel,support-channel,support-bot'
+    pm_config_register PM_SUPPORT_CHANNEL_PROVIDER var "$scopes" SUPPORT_CHANNEL_PROVIDER optional
+    pm_config_register PM_SUPPORT_CHANNEL_ID var "$scopes" SUPPORT_CHANNEL_ID required
+    pm_config_register PM_SUPPORT_CHANNEL_ACCOUNT_ID var "$scopes" SUPPORT_CHANNEL_ACCOUNT_ID required
+    pm_config_register PM_SUPPORT_CHANNEL_BOT_ID var "$scopes" SUPPORT_CHANNEL_BOT_ID required
+    pm_config_register PM_SUPPORT_CHANNEL_API_URL var "$scopes" SUPPORT_CHANNEL_API_URL required
+    pm_config_register PM_SUPPORT_CHANNEL_AUTH_URL var "$scopes" SUPPORT_CHANNEL_AUTH_URL optional
+    pm_config_register PM_SUPPORT_CHANNEL_BOT_SECRET secret "$scopes" SUPPORT_CHANNEL_BOT_SECRET required
+    pm_config_register PM_SUPPORT_CHANNEL_SIGNING_SECRET secret "$scopes" SUPPORT_CHANNEL_SIGNING_SECRET required
+}

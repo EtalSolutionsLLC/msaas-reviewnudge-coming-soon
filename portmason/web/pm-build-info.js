@@ -37,9 +37,9 @@ function metaContent(documentRef, name) {
 }
 
 export function isBuildInfoShortcut(event) {
-  if (!event || event.altKey) return false;
+  if (!event || event.shiftKey) return false;
   const key = cleanString(event.key).toLowerCase();
-  return key === 'p' && Boolean(event.shiftKey) && Boolean(event.ctrlKey || event.metaKey);
+  return key === 'm' && Boolean(event.altKey) && Boolean(event.ctrlKey || event.metaKey);
 }
 
 export function readBuildInfoMetadata(documentRef = globalThis.document) {
@@ -55,8 +55,8 @@ export function readBuildInfoMetadata(documentRef = globalThis.document) {
 export function normalizeBuildIdentity(build = {}, deploy = {}, metadata = {}) {
   return {
     productName: cleanString(metadata.productName, 'Portmason application'),
-    releaseVersion: cleanString(build.releaseVersion || deploy.releaseVersion || metadata.releaseVersion, 'Unavailable'),
-    buildNumber: cleanString(build.buildNumber || deploy.buildNumber || metadata.buildNumber, 'Unavailable'),
+    releaseVersion: cleanString(build.releaseVersion || deploy.releaseVersion || metadata.releaseVersion),
+    buildNumber: cleanString(build.buildNumber || deploy.buildNumber || metadata.buildNumber),
     buildId: cleanString(build.buildId || deploy.buildId, 'Unavailable'),
     environment: cleanString(deploy.environment, 'Not recorded'),
     officialBuild: formatBoolean(build.officialBuild),
@@ -72,10 +72,19 @@ export function normalizeBuildIdentity(build = {}, deploy = {}, metadata = {}) {
 }
 
 export function buildInfoRows(identity) {
-  return [
-    ['Product', identity.productName],
-    ['Release', identity.releaseVersion],
-    ['Build', identity.buildNumber],
+  const rows = [
+    ['Product', identity.productName]
+  ];
+
+  if (cleanString(identity.releaseVersion)) {
+    rows.push(['Release', identity.releaseVersion]);
+  }
+
+  if (cleanString(identity.buildNumber)) {
+    rows.push(['Build', identity.buildNumber]);
+  }
+
+  rows.push(
     ['Build ID', identity.buildId],
     ['Environment', identity.environment],
     ['Official build', identity.officialBuild || 'Not recorded'],
@@ -87,7 +96,9 @@ export function buildInfoRows(identity) {
     ['Artifact SHA-256', identity.artifactSha256],
     ['Verification', identity.verification],
     ['Builder', identity.builder]
-  ];
+  );
+
+  return rows;
 }
 
 async function fetchJsonOptional(url, fetchRef) {
@@ -159,7 +170,7 @@ function ensureUi(documentRef) {
       dataset: { pmBuildCommand: 'about' }
     });
     command.append(
-      element(documentRef, 'span', { className: 'pm-build-command-title' }, 'About this build'),
+      element(documentRef, 'span', { className: 'pm-build-command-title' }, 'Display build info'),
       element(documentRef, 'small', {}, 'Release, build, deployment, and verification details')
     );
     const hint = element(documentRef, 'p', { className: 'pm-build-keyboard-hint' }, 'Esc closes this menu');
@@ -187,7 +198,7 @@ function ensureUi(documentRef) {
     );
     const body = element(documentRef, 'div', { className: 'pm-build-dialog-body' });
     body.append(
-      element(documentRef, 'p', { className: 'pm-build-eyebrow' }, 'About this build'),
+      element(documentRef, 'p', { className: 'pm-build-eyebrow' }, 'Display build info'),
       element(documentRef, 'h2', { id: 'pmBuildInfoTitle' }, 'Build information'),
       element(documentRef, 'p', { className: 'pm-build-intro' }, 'These details identify the exact application artifact and deployment you are viewing.'),
       element(documentRef, 'p', { className: 'pm-build-status', id: 'pmBuildInfoStatus', role: 'status' }, 'Loading build information…'),

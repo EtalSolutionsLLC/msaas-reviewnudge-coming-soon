@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORTMASON_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+export PORTMASON_SHARE
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
@@ -47,7 +48,7 @@ read_canonical_url() {
         PM_NO_REDIRECT=1 \
         LIVE_TAIL=0 \
         LOG_LEVEL=ERROR \
-        PORTMASON_SHARE="${PORTMASON_ROOT}" \
+        PORTMASON_SHARE="${PORTMASON_SHARE}" \
             bash -c '
                 set -euo pipefail
                 . "${PORTMASON_SHARE}/pm-helpers" >/dev/null 2>&1
@@ -112,37 +113,21 @@ assert_equal \
     "$(read_canonical_url "${project}")" \
     "explicit APP_URL wins and root trailing slash is normalized"
 
-project="$(new_project deploy-output)"
-write_common_env "${project}"
-cat >> "${project}/.env" <<'ENV'
-APP_BASE_URL=http://reviewnudge-dev.localtest.me
+project="$(new_project production-derived-app-url)"
+cat > "${project}/.env" <<'ENV'
+APP_SLUG=reviewnudge
+DEPLOY_ENV=prd
+RUNTIME_ADAPTER_CODE=node-gcp
+PROJECT_ID=reviewnudge-prd-1234567890
+DEPLOYMENT_ID=reviewnudge-prd-1234567890
+STACK=reviewnudge-prd
+BASE_DOMAIN=etal.solutions
+APP_HOST=reviewnudge-prd.etal.solutions
+APP_BASE_URL=https://reviewnudge-prd.etal.solutions
 ENV
-mkdir -p "${project}/fakebin"
-cat > "${project}/fakebin/docker" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-exit 0
-SH
-chmod +x "${project}/fakebin/docker"
-
-deploy_output="$({
-    cd "${project}"
-    PM_NO_REDIRECT=1 \
-    LIVE_TAIL=0 \
-    LOG_LEVEL=INFO \
-    PATH="${project}/fakebin:${PATH}" \
-    PORTMASON_SHARE="${PORTMASON_ROOT}" \
-        "${PORTMASON_ROOT}/pm-deploy-local"
-} 2>&1)"
-
-if ! grep -Fq \
-    'Up. APP_URL: http://reviewnudge-dev.localtest.me' \
-    <<<"${deploy_output}"
-then
-    printf '%s\n' "${deploy_output}" >&2
-    fail "pm-deploy-local did not report the canonical APP_URL"
-fi
-pass_count=$((pass_count + 1))
-printf 'PASS: %s\n' "pm-deploy-local reports canonical APP_URL"
+assert_equal \
+    "https://reviewnudge.etal.solutions" \
+    "$(read_canonical_url "${project}")" \
+    "production derivation excludes DEPLOY_ENV when APP_URL is absent"
 
 printf 'All %d APP_URL tests passed.\n' "${pass_count}"

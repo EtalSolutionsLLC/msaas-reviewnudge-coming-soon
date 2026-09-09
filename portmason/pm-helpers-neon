@@ -3,14 +3,13 @@ set -euo pipefail
 
 # Neon platform helpers. Safe to source: no infrastructure mutation occurs here.
 
-: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
-. "${PORTMASON_SHARE}/pm-helpers" $@
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
 
 if [[ "${__PM_HELPERS_NEON_LOADED:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
 __PM_HELPERS_NEON_LOADED=1
-export __PM_HELPERS_NEON_LOADED
 
 : "${NEON_API_BASE:=https://console.neon.tech/api/v2}"
 : "${NEON_API_CONNECT_TIMEOUT_SECONDS:=10}"
@@ -25,6 +24,17 @@ export NEON_API_BASE NEON_API_CONNECT_TIMEOUT_SECONDS NEON_API_MAX_TIME_SECONDS
 export NEON_OPERATION_ATTEMPTS NEON_OPERATION_DELAY_SECONDS DB_REGION_ID
 export NEON_PG_VERSION NEON_BRANCH_NAME NEON_USE_POOLER
 
+if declare -p PM_DEPRECATED_SECRET_ALIASES >/dev/null 2>&1; then
+    PM_DEPRECATED_SECRET_ALIASES[NEON_API_KEY]=DB_API_KEY
+fi
+
+pm_neon_adopt_legacy_api_key() {
+    [[ -z "${DB_API_KEY:-}" && -n "${NEON_API_KEY:-}" ]] || return 0
+    DB_API_KEY="$NEON_API_KEY"
+    unset NEON_API_KEY
+    export DB_API_KEY
+}
+
 neon_urlencode() {
     local out_var="${1:?output variable required}"
     local value="${2-}"
@@ -34,22 +44,12 @@ neon_urlencode() {
     printf -v "$out_var" '%s' "$encoded"
 }
 
-neon_adopt_legacy_api_key() {
-    if [[ -n "${DB_API_KEY:-}" && -n "${NEON_API_KEY:-}" ]]; then
-        warn "DB_API_KEY and deprecated NEON_API_KEY are both configured; remove NEON_API_KEY" 2
-    fi
-    [[ -n "${DB_API_KEY:-}" || -z "${NEON_API_KEY:-}" ]] && return 0
-
-    DB_API_KEY="$NEON_API_KEY"
-    export DB_API_KEY
-    unset NEON_API_KEY
-    log WARN "mapped deprecated control-plane credential in memory" \
-        "from=NEON_API_KEY" "to=DB_API_KEY"
-}
-
 neon_load_api_key() {
+    pm_neon_adopt_legacy_api_key
     neon_sync_control_secret
 
+    pm_secret_resolve_value DB_API_KEY DB_API_KEY "${DB_API_KEY:-}"
+    export DB_API_KEY
     [[ -n "${DB_API_KEY:-}" ]] \
         || die "DB_API_KEY is required or must resolve through SECRET_PATHS" 2
 
@@ -57,10 +57,17 @@ neon_load_api_key() {
 
 neon_sync_control_secret() {
     [[ "${DEPLOY_ENV:-dev}" != "dev" ]] || return 0
-    local secret_val=$(get_secret "${DB_API_KEY_PATH:-}") 
-    DB_API_KEY="${secret_val}"
+    local secret_path=""
+    local secret_value=""
+
+    secret_path="$(get_secret_path_by_ref DB_API_KEY)" || return 0
+    secret_value="$(get_secret "$secret_path")"
+    [[ -n "$secret_value" ]] \
+        || die "control-plane credential resolved empty: DB_API_KEY" 2
+    DB_API_KEY="$secret_value"
     export DB_API_KEY
-    log INFO "control-plane credential synchronized" "key=DB_API_KEY" "path=${DB_API_KEY_PATH:-}" "partial_value=${DB_API_KEY:0:5}"
+    log INFO "control-plane credential synchronized" \
+        "key=DB_API_KEY" "path=$secret_path"
 }
 
 neon_api_request() {
@@ -68,21 +75,17 @@ neon_api_request() {
     local method="${2:?HTTP method required}"
     local path="${3:?API path required}"
     local body="${4-}"
+    local accepted_statuses="${5-}"
     local response_file status response_body message
     local -a curl_args
-
-#    =10000
-    DATABASE_STARTUP_ATTEMPTS=30
-    DATABASE_STARTUP_DELAY_MS=1000
-    DATABASE_MAX_TIMEOUT_MS=100000
 
     neon_load_api_key
     response_file="$(mktemp)"
     chmod 600 "$response_file"
     curl_args=(
         --silent --show-error
-        --connect-timeout "$(( (DATABASE_CONNECTION_TIMEOUT_MS + 999) / 1000 ))"
-        --max-time "$(( (DB_MAX_TIMEOUT_MS + 999) / 1000 ))"
+        --connect-timeout "$NEON_API_CONNECT_TIMEOUT_SECONDS"
+        --max-time "$NEON_API_MAX_TIME_SECONDS"
         --request "$method"
         --header 'Accept: application/json'
         --header "Authorization: Bearer ${DB_API_KEY}"
@@ -95,20 +98,27 @@ neon_api_request() {
 
     log DEBUG "API request" "method=$method" "path=$path"
     if ! status="$(curl "${curl_args[@]}" "${NEON_API_BASE}${path}")"; then
+        NEON_API_LAST_STATUS=""
         rm -f "$response_file"
         die "API request failed: $method $path" 2
+        return 2
     fi
+    NEON_API_LAST_STATUS="$status"
     response_body="$(cat "$response_file")"
     rm -f "$response_file"
     [[ -n "$response_body" ]] || response_body='{}'
 
-    if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+    if [[ ! "$status" =~ ^2[0-9][0-9]$ ]] \
+        && [[ " ${accepted_statuses//,/ } " != *" $status "* ]]; then
         message="$(jq -r '.message // .error // .detail // "No error message returned"' \
             <<<"$response_body" 2>/dev/null || printf 'Unable to parse Neon API error')"
         die "API returned HTTP $status for $method $path: $message" 2
+        return 2
     fi
-    jq -e . >/dev/null 2>&1 <<<"$response_body" \
-        || die "API returned invalid JSON for $method $path" 2
+    if ! jq -e . >/dev/null 2>&1 <<<"$response_body"; then
+        die "API returned invalid JSON for $method $path" 2
+        return 2
+    fi
     printf -v "$out_var" '%s' "$response_body"
     log DEBUG "API request complete" "method=$method" "path=$path" "status=$status"
 }
@@ -159,46 +169,8 @@ neon_connection_uri() {
     printf -v "$out_var" '%s' "$uri"
 }
 
-db_platform_preflight() {
-    [[ "${DB_PLATFORM_CODE:-}" == "neon" ]] || return 0
-
-    have curl || pm_preflight_error "database.platform.neon" "curl" \
-                "curl is required for Neon API operations"
-    have jq || pm_preflight_error "database.platform.neon" "jq" \
-        "jq is required for Neon API operations"
-    pm_preflight_require_secret_with_alias \
-        "database.platform.neon" "DB_API_KEY" "NEON_API_KEY" \
-        "Neon API credential is required in DB_API_KEY or must be mapped through SECRET_PATHS"
-
-    case "$NEON_PG_VERSION" in
-        14|15|16|17|18) ;;
-        *) pm_preflight_error "database.platform.neon" "NEON_PG_VERSION" \
-            "must be one of 14, 15, 16, 17, or 18" ;;
-    esac
-    [[ -n "$DB_REGION_ID" ]] \
-        || pm_preflight_error "database.platform.neon" "DB_REGION_ID" "must not be empty"
-    if [[ -n "${DB_ORG_ID:-}" && ! "$DB_ORG_ID" =~ ^[a-z0-9-]{1,60}$ ]]; then
-        pm_preflight_error "database.platform.neon" "DB_ORG_ID" \
-            "must match ^[a-z0-9-]{1,60}$"
-    fi
-    [[ "$NEON_OPERATION_ATTEMPTS" =~ ^[0-9]+$ && "$NEON_OPERATION_ATTEMPTS" -gt 0 ]] \
-        || pm_preflight_error "database.platform.neon" "NEON_OPERATION_ATTEMPTS" "must be a positive integer"
-    [[ "$NEON_OPERATION_DELAY_SECONDS" =~ ^[0-9]+$ ]] \
-        || pm_preflight_error "database.platform.neon" "NEON_OPERATION_DELAY_SECONDS" "must be a non-negative integer"
-    case "$NEON_USE_POOLER" in
-        1|true|TRUE|yes|YES|on|ON|0|false|FALSE|no|NO|off|OFF) ;;
-        *) pm_preflight_error "database.platform.neon" "NEON_USE_POOLER" "must be boolean" ;;
-    esac
-}
 # Build 087 compatibility entrypoints. The entity helper owns the Neon-specific
 # behavior; these names preserve the established Portmason lifecycle contract.
-pm_db_platform_preflight() {
-    db_platform_preflight "$@"
-}
-
-pm_neon_adopt_legacy_api_key() {
-    neon_adopt_legacy_api_key "$@"
-}
 
 pm_neon_api_request() {
     neon_api_request "$@"
@@ -207,4 +179,285 @@ pm_neon_api_request() {
 pm_neon_connection_uri() {
     neon_connection_uri "$@"
 }
+pm_telemetry_neon_use_context() {
+    DB_PROVIDER_PLATFORM_CODE="${TELEMETRY_DB_PROVIDER_PLATFORM_CODE:?TELEMETRY_DB_PROVIDER_PLATFORM_CODE required}"
+    DB_PROVIDER_CODE="${PM_TELEMETRY_DB_PROVIDER_CODE:?telemetry database provider required}"
+    DB_PLATFORM_CODE="${PM_TELEMETRY_DB_PLATFORM_CODE:?telemetry database platform required}"
+    DB_PROJECT_ID="${TELEMETRY_DB_PROJECT_ID:-}"
+    DB_PROJECT_NAME="${TELEMETRY_DB_PROJECT_NAME:-${STACK:?STACK required}-telemetry}"
+    DB_BRANCH_ID="${TELEMETRY_DB_BRANCH_ID:-}"
+    DB_BRANCH_NAME="${TELEMETRY_DB_BRANCH_NAME:-production}"
+    DB_REGION_ID="${TELEMETRY_DB_REGION_ID:-aws-us-west-2}"
+    DB_NAME="${TELEMETRY_DB_NAME:?TELEMETRY_DB_NAME required}"
+    DB_USER="${TELEMETRY_DB_USER:?TELEMETRY_DB_USER required}"
+    DB_PASSWORD="${TELEMETRY_DB_PASSWORD:?TELEMETRY_DB_PASSWORD required}"
+    DB_API_KEY="${TELEMETRY_DB_API_KEY:-${DB_API_KEY:-}}"
+    DB_ORG_ID="${TELEMETRY_ORG_ID:-}"
+    NEON_ENDPOINT_ID="${TELEMETRY_DB_ENDPOINT_ID:-}"
 
+    export DB_PROVIDER_PLATFORM_CODE DB_PROVIDER_CODE DB_PLATFORM_CODE
+    export DB_PROJECT_ID DB_PROJECT_NAME DB_BRANCH_ID DB_BRANCH_NAME DB_REGION_ID
+    export DB_NAME DB_USER DB_PASSWORD DB_API_KEY DB_ORG_ID NEON_ENDPOINT_ID
+}
+
+pm_telemetry_neon_publish_context() {
+    local application_url="${PM_TELEMETRY_NEON_APPLICATION_URL:-$DB_URL}"
+
+    TELEMETRY_DB_PROJECT_ID="$DB_PROJECT_ID"
+    TELEMETRY_DB_PROJECT_NAME="$DB_PROJECT_NAME"
+    TELEMETRY_DB_BRANCH_ID="$DB_BRANCH_ID"
+    TELEMETRY_DB_BRANCH_NAME="$DB_BRANCH_NAME"
+    TELEMETRY_DB_REGION_ID="$DB_REGION_ID"
+    TELEMETRY_DB_ENDPOINT_ID="$NEON_ENDPOINT_ID"
+    TELEMETRY_DB_HOST="$DB_HOST"
+    TELEMETRY_DB_PORT="$DB_PORT"
+    TELEMETRY_DB_SSL_MODE="$DB_SSL_MODE"
+    TELEMETRY_DB_URL="$application_url"
+    PM_TELEMETRY_DB_ADMIN_HOST="$DB_ADMIN_HOST"
+    PM_TELEMETRY_DB_ADMIN_PORT="$DB_ADMIN_PORT"
+    PM_TELEMETRY_DB_ADMIN_USER="$DB_ADMIN_USER"
+    PM_TELEMETRY_DB_ADMIN_PASSWORD="$DB_ADMIN_PASSWORD"
+    PM_TELEMETRY_DB_ADMIN_NAME="$DB_ADMIN_DATABASE"
+
+    export TELEMETRY_DB_PROJECT_ID TELEMETRY_DB_PROJECT_NAME
+    export TELEMETRY_DB_BRANCH_ID TELEMETRY_DB_BRANCH_NAME TELEMETRY_DB_REGION_ID
+    export TELEMETRY_DB_ENDPOINT_ID TELEMETRY_DB_HOST TELEMETRY_DB_PORT
+    export TELEMETRY_DB_SSL_MODE TELEMETRY_DB_URL
+    export PM_TELEMETRY_DB_ADMIN_HOST PM_TELEMETRY_DB_ADMIN_PORT
+    export PM_TELEMETRY_DB_ADMIN_USER PM_TELEMETRY_DB_ADMIN_PASSWORD
+    export PM_TELEMETRY_DB_ADMIN_NAME
+
+    env_init_set TELEMETRY_DB_PROJECT_ID "$TELEMETRY_DB_PROJECT_ID"
+    env_init_set TELEMETRY_DB_PROJECT_NAME "$TELEMETRY_DB_PROJECT_NAME"
+    env_init_set TELEMETRY_DB_BRANCH_ID "$TELEMETRY_DB_BRANCH_ID"
+    env_init_set TELEMETRY_DB_BRANCH_NAME "$TELEMETRY_DB_BRANCH_NAME"
+    env_init_set TELEMETRY_DB_REGION_ID "$TELEMETRY_DB_REGION_ID"
+    env_init_set TELEMETRY_DB_HOST "$TELEMETRY_DB_HOST"
+    env_init_set TELEMETRY_DB_PORT "$TELEMETRY_DB_PORT"
+    env_init_set TELEMETRY_DB_SSL_MODE "$TELEMETRY_DB_SSL_MODE"
+
+    if [[ "${DEPLOY_ENV:-dev}" == dev ]]; then
+        env_init_set TELEMETRY_DB_URL "$TELEMETRY_DB_URL"
+    elif declare -F pm_gcp_sync_secret_value >/dev/null 2>&1; then
+        pm_gcp_sync_secret_value TELEMETRY_DB_URL "$TELEMETRY_DB_URL"
+    fi
+    unset PM_TELEMETRY_NEON_APPLICATION_URL
+}
+
+pm_telemetry_neon_store_generated_role_password() {
+    local password="${1:?provider-generated password required}"
+
+    TELEMETRY_DB_PASSWORD="$password"
+    export TELEMETRY_DB_PASSWORD
+
+    if [[ "${DEPLOY_ENV:-dev}" == dev ]]; then
+        env_init_set TELEMETRY_DB_PASSWORD "$TELEMETRY_DB_PASSWORD"
+    elif declare -F pm_gcp_sync_secret_value >/dev/null 2>&1; then
+        pm_gcp_sync_secret_value TELEMETRY_DB_PASSWORD "$TELEMETRY_DB_PASSWORD"
+    else
+        die "Neon generated a telemetry role password but no production secret synchronizer is available" 2
+    fi
+
+    log INFO "stored provider-generated telemetry role password" \
+        "role=$TELEMETRY_DB_USER"
+}
+
+pm_telemetry_db_platform_neon_prepare_runtime() {
+    local PM_TELEMETRY_DB_RUNTIME_HOST=""
+    local PM_TELEMETRY_DB_RUNTIME_PORT=""
+    local PM_TELEMETRY_DB_RUNTIME_USER=""
+    local PM_TELEMETRY_DB_RUNTIME_PASSWORD=""
+    local PM_TELEMETRY_DB_RUNTIME_DATABASE=""
+
+    if [[ "${DEPLOY_ENV:-dev}" != dev \
+        && "${ADAPTER_CODE:-}" == gcp \
+        && "$(type -t pm_gcp_get_secret_value)" == function ]]; then
+        pm_gcp_get_secret_value TELEMETRY_DB_URL TELEMETRY_DB_URL \
+            || die "Unable to load managed TELEMETRY_DB_URL" 2
+        export TELEMETRY_DB_URL
+    else
+        pm_telemetry_hydrate_secret TELEMETRY_DB_URL
+    fi
+    [[ -n "${TELEMETRY_DB_URL:-}" ]] \
+        || die "TELEMETRY_DB_URL is required for Neon telemetry runtime access" 2
+
+    pm_db_postgres_parse_url_into PM_TELEMETRY_DB_RUNTIME "$TELEMETRY_DB_URL" \
+        || die "Unable to parse managed TELEMETRY_DB_URL: ${PM_DB_POSTGRES_PARSE_ERROR:-unknown error}" 2
+
+    TELEMETRY_DB_HOST="$PM_TELEMETRY_DB_RUNTIME_HOST"
+    TELEMETRY_DB_PORT="$PM_TELEMETRY_DB_RUNTIME_PORT"
+    TELEMETRY_DB_USER="$PM_TELEMETRY_DB_RUNTIME_USER"
+    TELEMETRY_DB_PASSWORD="$PM_TELEMETRY_DB_RUNTIME_PASSWORD"
+    TELEMETRY_DB_NAME="$PM_TELEMETRY_DB_RUNTIME_DATABASE"
+
+    export TELEMETRY_DB_HOST TELEMETRY_DB_PORT TELEMETRY_DB_USER
+    export TELEMETRY_DB_PASSWORD TELEMETRY_DB_NAME
+}
+
+pm_telemetry_neon_ensure_application_role() {
+    local response matches count body created password
+    local roles_path="/projects/${DB_PROJECT_ID:?DB_PROJECT_ID required}/branches/${DB_BRANCH_ID:?DB_BRANCH_ID required}/roles"
+
+    neon_api_request response GET "$roles_path"
+    matches="$(jq -c --arg name "${TELEMETRY_DB_USER:?TELEMETRY_DB_USER required}" \
+        '[.roles[]? | select(.name == $name)]' <<<"$response")"
+    count="$(jq 'length' <<<"$matches")"
+    if (( count > 1 )); then
+        die "multiple Neon roles named $TELEMETRY_DB_USER exist on the telemetry branch" 2
+    fi
+    if (( count == 1 )); then
+        log INFO "using existing Neon telemetry role" \
+            "role=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+        return 0
+    fi
+
+    body="$(jq -nc --arg name "$TELEMETRY_DB_USER" '{role:{name:$name}}')"
+    log INFO "creating Neon telemetry role" \
+        "role=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+    neon_api_request created POST "$roles_path" "$body" 409
+    if [[ "$NEON_API_LAST_STATUS" == 409 ]]; then
+        neon_api_request response GET "$roles_path"
+        matches="$(jq -c --arg name "$TELEMETRY_DB_USER" \
+            '[.roles[]? | select(.name == $name)]' <<<"$response")"
+        count="$(jq 'length' <<<"$matches")"
+        if (( count != 1 )); then
+            die "telemetry role create conflicted but did not resolve a unique existing role" 2
+            return 2
+        fi
+        log INFO "using existing Neon telemetry role after create conflict" \
+            "role=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+        return 0
+    fi
+
+    neon_wait_for_operations "$created"
+    password="$(jq -r '.role.password // empty' <<<"$created")"
+    [[ -n "$password" ]] \
+        || die "Neon created telemetry role $TELEMETRY_DB_USER without returning its password" 2
+    pm_telemetry_neon_store_generated_role_password "$password"
+    log INFO "Neon telemetry role created" \
+        "role=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+}
+
+pm_telemetry_neon_ensure_application_database() {
+    local response matches count body created
+    local databases_path="/projects/${DB_PROJECT_ID:?DB_PROJECT_ID required}/branches/${DB_BRANCH_ID:?DB_BRANCH_ID required}/databases"
+
+    neon_api_request response GET "$databases_path"
+    matches="$(jq -c --arg name "${TELEMETRY_DB_NAME:?TELEMETRY_DB_NAME required}" \
+        '[.databases[]? | select(.name == $name)]' <<<"$response")"
+    count="$(jq 'length' <<<"$matches")"
+    if (( count > 1 )); then
+        die "multiple Neon databases named $TELEMETRY_DB_NAME exist on the telemetry branch" 2
+    fi
+    if (( count == 1 )); then
+        log INFO "using existing Neon telemetry database" \
+            "database=$TELEMETRY_DB_NAME" "branch_id=$DB_BRANCH_ID"
+        return 0
+    fi
+
+    body="$(jq -nc --arg name "$TELEMETRY_DB_NAME" --arg owner_name "$TELEMETRY_DB_USER" \
+        '{database:{name:$name,owner_name:$owner_name}}')"
+    log INFO "creating Neon telemetry database" \
+        "database=$TELEMETRY_DB_NAME" "owner=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+    neon_api_request created POST "$databases_path" "$body" 409
+    if [[ "$NEON_API_LAST_STATUS" == 409 ]]; then
+        neon_api_request response GET "$databases_path"
+        matches="$(jq -c --arg name "$TELEMETRY_DB_NAME" \
+            '[.databases[]? | select(.name == $name)]' <<<"$response")"
+        count="$(jq 'length' <<<"$matches")"
+        if (( count != 1 )); then
+            die "telemetry database create conflicted but did not resolve a unique existing database" 2
+            return 2
+        fi
+        log INFO "using existing Neon telemetry database after create conflict" \
+            "database=$TELEMETRY_DB_NAME" "branch_id=$DB_BRANCH_ID"
+        return 0
+    fi
+
+    neon_wait_for_operations "$created"
+    log INFO "Neon telemetry database created" \
+        "database=$TELEMETRY_DB_NAME" "owner=$TELEMETRY_DB_USER" "branch_id=$DB_BRANCH_ID"
+}
+
+pm_telemetry_neon_rebuild_application_contract() {
+    DB_NAME="${TELEMETRY_DB_NAME:?TELEMETRY_DB_NAME required}"
+    local direct_url="" pooled_url="" application_url=""
+    DB_USER="${TELEMETRY_DB_USER:?TELEMETRY_DB_USER required}"
+    DB_PASSWORD="${TELEMETRY_DB_PASSWORD:?TELEMETRY_DB_PASSWORD required}"
+
+    pm_db_postgres_build_url direct_url \
+        "${NEON_DIRECT_HOST:?NEON_DIRECT_HOST required}" \
+        "${DB_PORT:?DB_PORT required}" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" require
+    pm_db_postgres_build_url pooled_url \
+        "${NEON_POOLED_HOST:?NEON_POOLED_HOST required}" \
+        "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" require
+    DB_DIRECT_URL="$direct_url"
+    DB_URL="$pooled_url"
+
+    case "${NEON_USE_POOLER:-true}" in
+        1|true|TRUE|yes|YES|on|ON)
+            DB_HOST="$NEON_POOLED_HOST"
+            application_url="$pooled_url"
+            ;;
+        0|false|FALSE|no|NO|off|OFF)
+            DB_HOST="$NEON_DIRECT_HOST"
+            DB_URL="$DB_DIRECT_URL"
+            application_url="$direct_url"
+            ;;
+        *) die "NEON_USE_POOLER must be boolean" 2 ;;
+    esac
+    PM_TELEMETRY_NEON_APPLICATION_URL="$application_url"
+    export PM_TELEMETRY_NEON_APPLICATION_URL
+}
+
+pm_telemetry_db_platform_neon_provision() {
+    local module_file="${PORTMASON_SHARE}/pm-provision-db-neon"
+    local project_env="${ENV_FILE:?ENV_FILE required}" scratch_env
+    local DB_PROVIDER_PLATFORM_CODE="" DB_PROVIDER_CODE="" DB_PLATFORM_CODE=""
+    local DB_PROJECT_ID="" DB_PROJECT_NAME="" DB_BRANCH_ID="" DB_BRANCH_NAME=""
+    local DB_REGION_ID="" DB_NAME="" DB_USER="" DB_PASSWORD="" DB_ORG_ID=""
+    local DB_API_KEY="${DB_API_KEY:-}" NEON_API_KEY="${NEON_API_KEY:-}"
+    local DB_HOST="" DB_PORT="" DB_SSL_MODE="" DB_URL="" DB_DIRECT_URL=""
+    local DB_ADMIN_ROLE="" DB_ADMIN_HOST="" DB_ADMIN_PORT="" DB_ADMIN_USER=""
+    local DB_ADMIN_PASSWORD="" DB_ADMIN_DATABASE="" NEON_ENDPOINT_ID=""
+    local NEON_DIRECT_HOST="" NEON_POOLED_HOST=""
+
+    [[ -r "$module_file" ]] || die "Neon provisioner is unavailable: $module_file" 2
+    scratch_env="$(mktemp)"
+    cp -- "$project_env" "$scratch_env"
+    ENV_FILE="$scratch_env"
+    export ENV_FILE
+
+    pm_telemetry_neon_use_context
+    log INFO "reusing Neon database provisioner" "module=pm-provision-db-neon"
+    . "$module_file"
+    # The reused provisioner sources the environment file; rehydrate managed
+    # telemetry credentials before using them to rebuild the runtime contract.
+    pm_telemetry_hydrate_secret TELEMETRY_DB_USER
+    pm_telemetry_hydrate_secret TELEMETRY_DB_PASSWORD
+    pm_telemetry_neon_ensure_application_role
+    pm_telemetry_neon_ensure_application_database
+    pm_telemetry_neon_rebuild_application_contract
+
+    ENV_FILE="$project_env"
+    export ENV_FILE
+    rm -f -- "$scratch_env"
+    pm_telemetry_neon_publish_context
+}
+
+pm_telemetry_db_platform_neon_deploy() {
+    local module_file="${PORTMASON_SHARE}/pm-deploy-db-neon"
+    local DB_PROVIDER_PLATFORM_CODE="" DB_PROVIDER_CODE="" DB_PLATFORM_CODE=""
+    local DB_PROJECT_ID="" DB_PROJECT_NAME="" DB_BRANCH_ID="" DB_BRANCH_NAME=""
+    local DB_REGION_ID="" DB_NAME="" DB_USER="" DB_PASSWORD="" DB_ORG_ID=""
+    local DB_API_KEY="${DB_API_KEY:-}" NEON_API_KEY="${NEON_API_KEY:-}"
+    local DB_HOST="" DB_PORT="" DB_SSL_MODE="" DB_URL="" DB_DIRECT_URL=""
+    local DB_ADMIN_ROLE="" DB_ADMIN_HOST="" DB_ADMIN_PORT="" DB_ADMIN_USER=""
+    local DB_ADMIN_PASSWORD="" DB_ADMIN_DATABASE="" NEON_ENDPOINT_ID=""
+    local NEON_DIRECT_HOST="" NEON_POOLED_HOST=""
+
+    [[ -r "$module_file" ]] || die "Neon deployer is unavailable: $module_file" 2
+    pm_telemetry_neon_use_context
+    log INFO "reusing Neon database deployer" "module=pm-deploy-db-neon"
+    . "$module_file"
+}

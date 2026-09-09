@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+target_dir="$(pwd -P)"
+legacy_name="DATABASE"'_SSL_MODE'
+canonical_name='DB_SSL_MODE'
+
+[[ "$target_dir" != / ]] || {
+    printf 'pm-migrate-db-ssl-mode: refusing to run from filesystem root\n' >&2
+    exit 2
+}
+
+command -v rg >/dev/null 2>&1 || {
+    printf 'pm-migrate-db-ssl-mode: rg is required\n' >&2
+    exit 2
+}
+command -v sed >/dev/null 2>&1 || {
+    printf 'pm-migrate-db-ssl-mode: sed is required\n' >&2
+    exit 2
+}
+
+mapfile -d '' files < <(
+    rg -l -0 --hidden "$legacy_name" "$target_dir" \
+        --glob '!deploy/**' \
+        --glob '!.git/**' \
+        --glob '!__pycache__/**' \
+        || true
+)
+
+if ((${#files[@]} == 0)); then
+    printf 'No %s references found in %s\n' "$legacy_name" "$target_dir"
+    exit 0
+fi
+
+sed -i "s/${legacy_name}/${canonical_name}/g" "${files[@]}"
+printf 'Renamed %s to %s in %d files under %s\n' \
+    "$legacy_name" "$canonical_name" "${#files[@]}" "$target_dir"

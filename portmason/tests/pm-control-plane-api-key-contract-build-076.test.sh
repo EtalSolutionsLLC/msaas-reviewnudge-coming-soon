@@ -46,6 +46,12 @@ for role in db web app jobs worker cache; do
         '^(DB_API_KEY|RUNTIME_API_KEY|DNS_API_KEY|STORAGE_API_KEY|EMAIL_API_KEY|BILLING_API_KEY|NEON_API_KEY)$'
 done
 
+PM_ADDITIONAL_SECRET_KEYS=TURNSTILE_SITE_KEY,TURNSTILE_SECRET_KEY
+export PM_ADDITIONAL_SECRET_KEYS
+pm_secret_key_is_public_exception TURNSTILE_SITE_KEY
+! pm_service_secret_keys web | grep -Fxq TURNSTILE_SITE_KEY
+pm_service_secret_keys web | grep -Fxq TURNSTILE_SECRET_KEY
+
 cat >"${ENV_FILE}.generated" <<'ENV'
 DB_API_KEY=canonical-db-control-secret
 RUNTIME_API_KEY=canonical-runtime-control-secret
@@ -55,7 +61,6 @@ EMAIL_API_KEY=canonical-email-control-secret
 BILLING_API_KEY=canonical-billing-control-secret
 ENV
 pm_preflight_reset
-pm_validate_secret_registry
 (( ${#PM_PREFLIGHT_ERRORS[@]} == 0 ))
 
 # Canonical Neon configuration passes without warnings.

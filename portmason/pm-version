@@ -10,7 +10,8 @@ set -euo pipefail
 export PM_NO_REDIRECT=1
 
 # shellcheck disable=SC1091
-. "${PORTMASON_SHARE}/pm-helpers" --minimal >&2
+#. "${PORTMASON_SHARE}/pm-helpers" --minimal >&2
+. "${PORTMASON_SHARE}/pm-helpers"
 
 # pm-version deliberately writes only command results and generated file content
 # to stdout. All human-readable operational messages use pm-helpers log/die.
@@ -28,9 +29,7 @@ find_version_root() {
     candidate="$(cd -- "${start_dir}" && pwd -P)"
 
     while :; do
-        if [[ -f "${candidate}/RELEASE_VERSION" \
-            && -f "${candidate}/BUILD_NUMBER" \
-            && -f "${candidate}/VERSION" ]]; then
+        if [[ -f "${candidate}/BUILD_NUMBER" ]]; then
             emit_line "${candidate}"
             return 0
         fi
@@ -70,13 +69,12 @@ resolve_project_root() {
         return 0
     fi
 
-    die "Unable to locate RELEASE_VERSION, BUILD_NUMBER, and VERSION. Run pm-version from a project workspace or set PM_VERSION_ROOT."
+    die "Unable to locate BUILD_NUMBER. Run pm-version from a project workspace or set PM_VERSION_ROOT."
 }
 
 PROJECT_ROOT="$(resolve_project_root)"
 RELEASE_FILE="${PROJECT_ROOT}/RELEASE_VERSION"
 BUILD_FILE="${PROJECT_ROOT}/BUILD_NUMBER"
-COMPAT_FILE="${PROJECT_ROOT}/VERSION"
 LOCK_FILE="${PROJECT_ROOT}/.portmason-version.lock"
 
 usage() {
@@ -84,7 +82,6 @@ usage() {
 Usage:
   pm-version current [--json]
   pm-version validate
-  pm-version release bump major|minor|patch
   pm-version build allocate [--ci|--allow-local]
   pm-version build meta [--emit-html]
   pm-version build materialize --site-dir PATH
@@ -94,9 +91,8 @@ Usage:
   pm-version deployment verify --site-dir PATH
 
 Rules:
-  - RELEASE_VERSION is the product/marketing release.
-  - BUILD_NUMBER is the authoritative sequential deployable build number.
-  - VERSION is a compatibility alias maintained only by this command.
+  - BUILD_NUMBER is optional Portmason-managed build metadata.
+  - VERSION is retired compatibility debris and is ignored when present.
   - Build allocation is CI-only unless --allow-local is explicit.
   - Deployment commands never change release or build numbers.
 USAGE
@@ -127,28 +123,22 @@ read_trimmed() {
 }
 
 release_version() {
-    read_trimmed "${RELEASE_FILE}"
+    [[ -r "${RELEASE_FILE}" ]] || return 0
+    tr -d '[:space:]' < "${RELEASE_FILE}"
 }
 
 build_number() {
-    read_trimmed "${BUILD_FILE}"
+    [[ -r "${BUILD_FILE}" ]] || return 0
+    tr -d '[:space:]' < "${BUILD_FILE}"
 }
 
 validate_values() {
-    local release=""
     local build=""
-    local compat=""
 
-    release="$(release_version)"
     build="$(build_number)"
-    compat="$(read_trimmed "${COMPAT_FILE}")"
 
-    [[ "${release}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] \
-        || die "Invalid RELEASE_VERSION ${release@Q}; expected semantic version MAJOR.MINOR.PATCH"
-    [[ "${build}" =~ ^[0-9]{3,}$ ]] \
+    [[ -z "${build}" || "${build}" =~ ^[0-9]{3,}$ ]] \
         || die "Invalid BUILD_NUMBER ${build@Q}; expected at least three digits"
-    [[ "${compat}" == "${build}" ]] \
-        || die "VERSION compatibility alias (${compat}) does not match BUILD_NUMBER (${build})"
 }
 
 mirror_version_files() {
@@ -157,9 +147,8 @@ mirror_version_files() {
     [[ -d "${PROJECT_ROOT}/deploy" ]] || return 0
 
     while IFS= read -r -d '' snapshot; do
-        atomic_write "${snapshot}/RELEASE_VERSION" "$(release_version)"
         atomic_write "${snapshot}/BUILD_NUMBER" "$(build_number)"
-        atomic_write "${snapshot}/VERSION" "$(build_number)"
+        [[ ! -r "${RELEASE_FILE}" ]] || atomic_write "${snapshot}/RELEASE_VERSION" "$(release_version)"
     done < <(find "${PROJECT_ROOT}/deploy" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
@@ -173,24 +162,21 @@ validate_mirrors() {
     [[ -d "${PROJECT_ROOT}/deploy" ]] || return 0
 
     while IFS= read -r -d '' snapshot; do
-        [[ -r "${snapshot}/RELEASE_VERSION" ]] \
-            || die "Deploy snapshot is missing RELEASE_VERSION: ${snapshot}"
         [[ -r "${snapshot}/BUILD_NUMBER" ]] \
             || die "Deploy snapshot is missing BUILD_NUMBER: ${snapshot}"
-        [[ -r "${snapshot}/VERSION" ]] \
-            || die "Deploy snapshot is missing VERSION: ${snapshot}"
-        [[ "$(read_trimmed "${snapshot}/RELEASE_VERSION")" == "${expected_release}" ]] \
-            || die "Deploy snapshot release mismatch: ${snapshot}"
         [[ "$(read_trimmed "${snapshot}/BUILD_NUMBER")" == "${expected_build}" ]] \
             || die "Deploy snapshot build mismatch: ${snapshot}"
-        [[ "$(read_trimmed "${snapshot}/VERSION")" == "${expected_build}" ]] \
-            || die "Deploy snapshot VERSION alias mismatch: ${snapshot}"
+        if [[ -r "${RELEASE_FILE}" ]]; then
+            [[ -r "${snapshot}/RELEASE_VERSION" ]] \
+                || die "Deploy snapshot is missing RELEASE_VERSION: ${snapshot}"
+            [[ "$(read_trimmed "${snapshot}/RELEASE_VERSION")" == "${expected_release}" ]] \
+                || die "Deploy snapshot release mismatch: ${snapshot}"
+        fi
     done < <(find "${PROJECT_ROOT}/deploy" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
 validate_all() {
     validate_values
-    validate_mirrors
 }
 
 is_true() {
@@ -287,14 +273,19 @@ emit_meta_html() {
     local release=""
     local build=""
 
-    validate_all
     release="$(release_version)"
     build="$(build_number)"
 
-    # Exact generated HTML is an intentional printf exception.
-    printf '<!-- ETAL_SITE_RELEASE version="%s" build="%s" build-details="/build-info.json" deployment-details="/deploy-info.json" -->\n' "${release}" "${build}"
-    printf '<meta name="etal-site-release" content="%s" />\n' "${release}"
-    printf '<meta name="etal-site-build" content="%s" />\n' "${build}"
+    [[ -n "${release}" || -n "${build}" ]] || return 0
+
+    printf '<!-- ETAL_SITE_RELEASE build-details="/build-info.json" deployment-details="/deploy-info.json" -->\n'
+
+    [[ -z "${release}" ]] \
+        || printf '<meta name="etal-site-release" content="%s" />\n' "${release}"
+
+    [[ -z "${build}" ]] \
+        || printf '<meta name="etal-site-build" content="%s" />\n' "${build}"
+
     printf '<meta name="etal-site-build-info" content="/build-info.json" />\n'
     printf '<meta name="etal-site-deploy-info" content="/deploy-info.json" />\n'
 }
@@ -309,32 +300,51 @@ materialize_build() {
     local official="false"
     local build_id=""
 
-    validate_all
     release="$(release_version)"
     build="$(build_number)"
+
+    mkdir -p -- "${site_dir}"
+
+    if [[ -z "${release}" && -z "${build}" ]]; then
+        rm -f -- "${site_dir}/build-info.json"
+        return 0
+    fi
+
     commit="$(source_commit)"
     dirty="$(source_dirty)"
     built_at="${PM_BUILT_AT:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
 
-    if is_true "${PM_OFFICIAL_BUILD:-}" || [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    if is_true "${PM_OFFICIAL_BUILD:-}" \
+        || [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
         official="true"
     fi
 
-    if [[ "${official}" == "true" ]]; then
-        [[ "${dirty}" == "false" ]] \
-            || die "Official builds require a clean source tree"
-        [[ "${commit}" =~ ^[0-9A-Fa-f]{40,64}$ ]] \
-            || die "Official builds require a full source commit identifier; got ${commit@Q}"
-        build_id="${build}"
-    else
-        build_id="dev-${commit:0:12}"
-        [[ "${dirty}" == "true" ]] && build_id+="-dirty"
+    if [[ -n "${build}" ]]; then
+        if [[ "${official}" == "true" ]]; then
+            [[ "${dirty}" == "false" ]] \
+                || die "Official builds require a clean source tree"
+
+            [[ "${commit}" =~ ^[0-9A-Fa-f]{40,64}$ ]] \
+                || die "Official builds require a full source commit identifier"
+
+            build_id="${build}"
+        else
+            build_id="dev-${commit:0:12}"
+
+            [[ "${dirty}" == "true" ]] \
+                && build_id+="-dirty"
+        fi
     fi
 
-    mkdir -p -- "${site_dir}"
-    python3 - "${site_dir}/build-info.json" "${release}" "${build}" "${build_id}" "${official}" "${commit}" "${dirty}" "${built_at}" <<'PY'
-from __future__ import annotations
-
+    python3 - \
+        "${site_dir}/build-info.json" \
+        "${release}" \
+        "${build}" \
+        "${build_id}" \
+        "${official}" \
+        "${commit}" \
+        "${dirty}" \
+        "${built_at}" <<'PY'
 import json
 import os
 import sys
@@ -342,11 +352,12 @@ import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
+release = sys.argv[2]
+build = sys.argv[3]
+build_id = sys.argv[4]
+
 payload = {
     "schemaVersion": 1,
-    "releaseVersion": sys.argv[2],
-    "buildNumber": sys.argv[3],
-    "buildId": sys.argv[4],
     "officialBuild": sys.argv[5].lower() == "true",
     "sourceCommit": sys.argv[6],
     "sourceDirty": sys.argv[7].lower() == "true",
@@ -354,18 +365,34 @@ payload = {
     "artifactSha256": None,
     "builder": "Et al Solutions LLC",
 }
+
+if release:
+    payload["releaseVersion"] = release
+
+if build:
+    payload["buildNumber"] = build
+
+if build_id:
+    payload["buildId"] = build_id
+
 path.parent.mkdir(parents=True, exist_ok=True)
-fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+
+fd, temporary = tempfile.mkstemp(
+    prefix=path.name + ".",
+    dir=str(path.parent),
+)
+
 try:
     os.fchmod(fd, 0o644)
+
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    os.replace(temporary_name, path)
-    os.chmod(path, 0o644)
+
+    os.replace(temporary, path)
 finally:
-    if os.path.exists(temporary_name):
-        os.unlink(temporary_name)
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 PY
 }
 
@@ -454,6 +481,84 @@ def atomic_json(path: Path, payload: dict) -> None:
 atomic_json(build_path, build)
 atomic_json(manifest_path, manifest)
 print(artifact_sha)
+PY
+}
+
+apply_asset_cache_buster() {
+    local site_dir="$1"
+    local build="$2"
+
+    python3 - "${site_dir}" "${build}" <<'PY'
+from __future__ import annotations
+
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+site = Path(sys.argv[1]).resolve()
+build = sys.argv[2]
+asset_exts = (".css", ".js", ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
+attr_pattern = re.compile(r'(?P<prefix>\b(?:href|src)=["\'])(?P<url>[^"\']+)(?P<suffix>["\'])')
+module_pattern = re.compile(
+    r'(?P<prefix>\bfrom\s*["\']|\bimport\s*\(\s*["\']|\bimport\s*["\'])'
+    r'(?P<url>[^"\']+)'
+    r'(?P<suffix>["\'])'
+)
+
+
+def should_version(url: str) -> bool:
+    lowered = url.lower()
+    if lowered.startswith(("http://", "https://", "//", "mailto:", "tel:", "javascript:", "data:", "#")):
+        return False
+    path = urlsplit(url).path.lower()
+    return path.endswith(asset_exts)
+
+
+def version_url(url: str) -> str:
+    if not should_version(url):
+        return url
+    parts = urlsplit(url)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "v"]
+    query.append(("v", build))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def atomic_text(path: Path, content: str) -> None:
+    fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary_name, path)
+        os.chmod(path, 0o644)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+for path in sorted(site.rglob("*.html")):
+    original = path.read_text(encoding="utf-8")
+
+    def replace(match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}{version_url(match.group('url'))}{match.group('suffix')}"
+
+    updated = attr_pattern.sub(replace, original)
+    if updated != original:
+        atomic_text(path, updated)
+
+
+for path in sorted(site.rglob("*.js")):
+    original = path.read_text(encoding="utf-8")
+
+    def replace_module(match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}{version_url(match.group('url'))}{match.group('suffix')}"
+
+    updated = module_pattern.sub(replace_module, original)
+    if updated != original:
+        atomic_text(path, updated)
 PY
 }
 
@@ -603,58 +708,30 @@ PY
 }
 
 cmd_current() {
-    validate_all
+    local build=""
+
+    build="$(build_number)"
 
     if [[ "${1:-}" == "--json" ]]; then
-        python3 - "$(release_version)" "$(build_number)" <<'PY'
+        python3 - "${build}" <<'PY'
 import json
 import sys
 
-print(
-    json.dumps(
-        {"releaseVersion": sys.argv[1], "buildNumber": sys.argv[2]},
-        indent=2,
-        sort_keys=True,
-    )
-)
+payload = {}
+
+if sys.argv[1]:
+    payload["buildNumber"] = sys.argv[1]
+
+print(json.dumps(payload, indent=2, sort_keys=True))
 PY
         return 0
     fi
 
-    # Query command output is an intentional stdout API.
-    printf 'Release %s\nBuild %s\n' "$(release_version)" "$(build_number)"
+    [[ -z "${build}" ]] \
+        || printf 'Build %s\n' "${build}"
 }
 
-cmd_release_bump() {
-    local kind="${1:-}"
-    local next=""
 
-    [[ "${kind}" == "major" || "${kind}" == "minor" || "${kind}" == "patch" ]] \
-        || die "Release bump requires major, minor, or patch"
-    validate_all
-
-    next="$(python3 - "$(release_version)" "${kind}" <<'PY'
-import sys
-
-version, kind = sys.argv[1], sys.argv[2]
-core = version.split("+", 1)[0].split("-", 1)[0]
-major, minor, patch = map(int, core.split("."))
-if kind == "major":
-    major, minor, patch = major + 1, 0, 0
-elif kind == "minor":
-    minor, patch = minor + 1, 0
-else:
-    patch += 1
-print(f"{major}.{minor}.{patch}")
-PY
-)"
-
-    atomic_write "${RELEASE_FILE}" "${next}"
-    mirror_version_files
-    validate_all
-    log INFO "Release advanced to ${next}"
-    emit_line "${next}"
-}
 
 cmd_build_allocate() {
     local allow="false"
@@ -690,8 +767,6 @@ PY
 )"
 
     atomic_write "${BUILD_FILE}" "${next}"
-    atomic_write "${COMPAT_FILE}" "${next}"
-    mirror_version_files
     validate_all
     log INFO "Build ${next} allocated"
     emit_line "${next}"
@@ -760,11 +835,12 @@ cmd_build_finalize() {
     environment="$(resolve_environment "${environment}")"
 
     materialize_build "${site_dir}"
+    apply_asset_cache_buster "${site_dir}" "$(build_number)"
     seal_build "${site_dir}" >/dev/null
     record_deployment "${site_dir}" "${environment}" "${deployment_id}"
     verify_deployment "${site_dir}" >/dev/null
 
-    log INFO "Finalized release $(release_version), build $(build_number), environment ${environment}"
+    log INFO "Finalized build $(build_number), environment ${environment}"
 }
 
 cmd_deployment_record() {
@@ -826,15 +902,6 @@ main() {
             validate_all
             log INFO "Version metadata is valid"
             emit_line "valid"
-            ;;
-        release)
-            shift
-            [[ "${1:-}" == "bump" ]] \
-                || die "Expected: pm-version release bump major|minor|patch"
-            shift
-            [[ $# -eq 1 ]] \
-                || die "Expected: pm-version release bump major|minor|patch"
-            cmd_release_bump "$@"
             ;;
         build)
             shift

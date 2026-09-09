@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
-export CUR_SCRIPT
 : "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
 . "${PORTMASON_SHARE}/pm-helpers" "$@"
 
 main() {
-  local compose_file="${1:-docker-compose.yml}"
-  local env_file=".env.generated"
+  local compose_file env_file="${ENV_FILE:-${PROJECT_ROOT}/.env}.generated"
+  local -a compose_cmd
+
+  [[ -z "${1:-}" ]] || : "${PM_COMPOSE_FILE:	=$PM_COMPOSE_FILE:-$1}"
+  pm_compose_init_command
+  pm_compose_control_file compose_file
+  compose_cmd=("${PM_COMPOSE_CMD[@]}")
 
   have docker || fatal_error "docker is not installed or not on PATH"
   have jq     || fatal_error "jq is not installed or not on PATH"
-  [[ -f "${compose_file}" ]] || fatal_error "${compose_file} not found in $(pwd)"
+  [[ -f "${compose_file}" ]] || fatal_error "${compose_file} not found"
 
-  local -a base_cmd=(docker compose -f "${compose_file}" config)
-  local -a env_flag=()
-
-  # If compose supports --env-file and .env.generated exists, use it for interpolation.
+  # If Compose supports --env-file and the active environment is rendered, use it.
   if [[ -f "${env_file}" ]] && docker compose --help 2>/dev/null | grep -q -- '--env-file'; then
-    env_flag=(--env-file "${env_file}")
+    compose_cmd+=(--env-file "${env_file}")
   fi
 
   # Prefer JSON output if supported.
-  if docker compose "${env_flag[@]}" -f "${compose_file}" config --help 2>/dev/null | grep -q -- '--format'; then
+  if "${compose_cmd[@]}" config --help 2>/dev/null | grep -q -- '--format'; then
     # Some versions support --format but not json; try and fall back if it fails.
-    if docker compose "${env_flag[@]}" -f "${compose_file}" config --format json >/dev/null 2>&1; then
-      docker compose "${env_flag[@]}" -f "${compose_file}" config --format json \
+    if "${compose_cmd[@]}" config --format json >/dev/null 2>&1; then
+      "${compose_cmd[@]}" config --format json \
         | jq -c '
             .services
             | to_entries
@@ -40,7 +40,7 @@ main() {
   # Fallback: YAML output + yq parsing
   have yq || fatal_error "yq is required for fallback parsing (docker compose config --format json not available)"
 
-  docker compose "${env_flag[@]}" -f "${compose_file}" config \
+  "${compose_cmd[@]}" config \
     | yq eval -o=json '
         (.services // {})
         | to_entries

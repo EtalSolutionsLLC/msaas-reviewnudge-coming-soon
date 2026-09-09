@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_config_azure() {
+    # Azure runtime injection is owned by pm-helpers-azure. The registry still
+    # discovers this entity so adapter-specific configuration can be applied
+    # without central provider branching.
+    :
+}
+
+pm_config_apply_azure() {
+    log INFO "pm-config-azure: registry ready for Azure Container Apps injection"
+}

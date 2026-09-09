@@ -22,8 +22,8 @@ The contract centers a requested section within the usable viewport below the st
 
 The capability:
 
-- opens a command palette with `Ctrl+Shift+P` on Windows/Linux or `Command+Shift+P` on macOS;
-- exposes the `About this build` command;
+- opens a command palette with `Ctrl+Alt+M` on Windows/Linux or `Command+Option+M` on macOS;
+- exposes the `Display build info` command;
 - reads only the allowlisted `build-info.json` and `deploy-info.json` fields;
 - displays release, build, deployment, source, artifact, and verification identity;
 - supports optional visible triggers with `data-pm-build-info-trigger`;
@@ -46,3 +46,41 @@ The standard metadata contract is:
 - `/artifact-manifest.json`
 
 Applications with restrictive static-file allowlists must explicitly serve those paths.
+
+## Consent-gated Google Tag Manager
+
+`base/assets/js/pm-web-analytics.js` and `base/assets/css/pm-web-analytics.css` provide Portmason's local consent interface and consent-gated GTM loader.
+
+The capability:
+
+- sets Google Consent Mode to denied before any Google code can load;
+- loads Google Tag Manager only after analytics consent is granted;
+- keeps advertising and personalization storage denied;
+- provides an accessible analytics preference banner and dialog;
+- remembers the visitor's choice in a necessary, first-party cookie;
+- removes first-party Google Analytics cookies when analytics consent is denied;
+- leaves GA4 configuration, page views, and analytics events entirely to GTM.
+
+
+Include these two lines
+  <!-- PM:TRACKING-CONSENT-PART1 -->
+  <!-- /PM:TRACKING-CONSENT-PART1 -->
+directly beneath <head>
+
+Include these two lines
+  <!-- PM:TRACKING-CONSENT-PART2 -->
+  <!-- /PM:TRACKING-CONSENT-PART2 -->
+directly beneath <body>
+
+Be sure to include this global var in your .env file
+GTM_CONTAINER_ID=GTM-XXXXXXX
+
+Configure the Google tag, GA4 stream, page views, events, and route scope in
+the matching GTM container. The local capability deliberately has no GA4
+measurement ID and emits no analytics events.
+
+Applications that emit a Content Security Policy must allow:
+
+- scripts from `https://www.googletagmanager.com`;
+- connections to `https://www.googletagmanager.com`, `https://*.google-analytics.com`, and `https://*.analytics.google.com`;
+- images from `https://*.google-analytics.com` and `https://*.googletagmanager.com`.

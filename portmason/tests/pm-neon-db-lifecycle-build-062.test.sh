@@ -35,7 +35,8 @@ path="${url#*api/v2}"
 printf '%s %s\n' "$method" "$path" >>"${MOCK_TRACE:?}"
 case "$method $path" in
   'GET /projects?limit=100&org_id=org-062') body='{"projects":[]}' ;;
-  'POST /projects?org_id=org-062') body='{"project":{"id":"prj_062","name":"reviewnudge-prd"},"branch":{"id":"br_062","name":"main"},"endpoints":[{"id":"ep_062","branch_id":"br_062","type":"read_write"}],"operations":[]}' ;;
+  'POST /projects?org_id=org-062') body='{"project":{"id":"prj_062","name":"reviewnudge-prd"},"branch":{"id":"br_062","name":"main"},"endpoints":[{"id":"ep_062","branch_id":"br_062","type":"read_write"}],"operations":[{"id":"op_062"}]}' ;;
+  'GET /projects/prj_062/operations/op_062') body='{"operation":{"status":"finished"}}' ;;
   'GET /projects/prj_062/branches') body='{"branches":[{"id":"br_062","name":"main","default":true}]}' ;;
   'GET /projects/prj_062/endpoints') body='{"endpoints":[{"id":"ep_062","branch_id":"br_062","type":"read_write","disabled":false,"current_state":"active"}]}' ;;
   'GET /projects/prj_062/branches/br_062/roles') body='{"roles":[{"name":"neondb_owner","protected":true}]}' ;;
@@ -105,10 +106,11 @@ pm_deploy_db_provider
 [[ "$NEON_ENDPOINT_ID" == ep_062 ]]
 [[ "$DB_HOST" == ep-062-pooler.us-west-2.aws.neon.tech ]]
 [[ "$NEON_DIRECT_HOST" == ep-062.us-west-2.aws.neon.tech ]]
-[[ "$DATABASE_URL" == postgresql://appuser:app-secret@ep-062-pooler.us-west-2.aws.neon.tech:5432/appdb?sslmode=require ]]
-[[ "$DATABASE_DIRECT_URL" == postgresql://appuser:app-secret@ep-062.us-west-2.aws.neon.tech:5432/appdb?sslmode=require ]]
+[[ "$DB_URL" == postgresql://appuser:app-secret@ep-062-pooler.us-west-2.aws.neon.tech:5432/appdb?sslmode=require ]]
+[[ "$DB_DIRECT_URL" == postgresql://appuser:app-secret@ep-062.us-west-2.aws.neon.tech:5432/appdb?sslmode=require ]]
 grep -Fq 'GET /projects?limit=100&org_id=org-062' "$TRACE"
 grep -Fq 'POST /projects?org_id=org-062' "$TRACE"
+grep -Fq 'GET /projects/prj_062/operations/op_062' "$TRACE"
 grep -Fq 'CREATE ROLE' "$TRACE"
 grep -Fq '001-create.sql' "$TEST_LOG"
 grep -Fq 'endpoint verified' "$TEST_LOG"

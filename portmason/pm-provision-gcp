@@ -2,19 +2,71 @@
 set -euo pipefail
 
 : "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
-if ! declare -F log >/dev/null 2>&1; then
-    . "${PORTMASON_SHARE}/pm-helpers" "$@"
-fi
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+pm_gcp_load_deployable_services() {
+    if [[ "${PM_GCP_DEPLOYABLE_SERVICES_LOADED:-0}" == "1" ]]; then
+        return 0
+    fi
+
+    local compose_json=""
+    pm_compose_init_command
+    compose_json="$("${PM_COMPOSE_CMD[@]}" config \
+        --no-interpolate \
+        --no-env-resolution \
+        --format json 2>&1)" || {
+        log ERROR "Compose services could not be inspected without interpolation" \
+            "detail=$(pm_compose_render_failure_message "$compose_json")"
+        return 1
+    }
+
+    if ! jq -e '.services and (.services | type == "object")' >/dev/null 2>&1 \
+        <<<"$compose_json"; then
+        log ERROR "Unresolved Compose model is not valid service JSON" \
+            "detail=$(pm_compose_render_failure_message "$compose_json" 10)"
+        return 1
+    fi
+
+    compose_json="$(
+        jq -c '
+            def key_value_array_to_object:
+                if type != "array" then .
+                else reduce .[] as $item ({};
+                    ($item | index("=")) as $split
+                    | if $split == null then .[$item] = null
+                      else .[$item[0:$split]] = $item[($split + 1):]
+                      end
+                )
+                end;
+            .services |= with_entries(
+                .value.labels = ((.value.labels // {}) | key_value_array_to_object)
+                | .value.environment = ((.value.environment // {}) | key_value_array_to_object)
+            )
+        ' <<<"$compose_json"
+    )" || {
+        log ERROR "Unresolved Compose service metadata could not be normalized"
+        return 1
+    }
+
+    PM_GCP_DEPLOYABLE_SERVICES_TSV="$(
+        PM_COMPOSE_MODEL_JSON="$compose_json"
+        PROJECT_SERVICES=""
+        export PM_COMPOSE_MODEL_JSON PROJECT_SERVICES
+        pm_compose_load_model
+        pm_compose_deployable_services_tsv
+    )" || return 1
+    PM_GCP_DEPLOYABLE_SERVICES_LOADED=1
+}
 
 bind_permissions() {
-    pm_compose_load_model
+    pm_gcp_load_deployable_services || return 1
     local service role service_account
     log INFO "pm-provision-gcp: binding runtime service permissions"
     while IFS=$'\t' read -r service role _image _has_build; do
         [[ -n "$service" ]] || continue
         service_account="$(format_sa_email "$service")"
         bind_service_account "$service_account" "$role"
-    done < <(pm_compose_deployable_services_tsv)
+    done <<<"$PM_GCP_DEPLOYABLE_SERVICES_TSV"
     log INFO "pm-provision-gcp: runtime service permission binding complete"
 }
 
@@ -53,6 +105,9 @@ ensure_apis() {
         sqladmin.googleapis.com \
         secretmanager.googleapis.com \
         iamcredentials.googleapis.com \
+        pubsub.googleapis.com \
+        cloudtasks.googleapis.com \
+        cloudscheduler.googleapis.com \
         cloudresourcemanager.googleapis.com
     do
         if ! printf '%s\n' "$GCLOUD_ENABLED_SERVICE_NAMES" | grep -Fxq "$api"; then
@@ -106,7 +161,7 @@ ensure_bucket() {
 }
 
 ensure_env_tag() {
-    local base_project_id=github-archive-480721
+    local base_project_id=${GLOBAL_REFERENCE_DEPLOYMENT_ID}
     local base_parent="projects/$base_project_id"
     local keyname='environment'
     local keyvalue="$(get_deploy_env_value "$DEPLOY_ENV" long)" || die "get_deploy_env_value failed with '$DEPLOY_ENV'"
@@ -206,9 +261,9 @@ ensure_project(){
     # 1) Create or check project + billing
     log "Checking if project '${DEPLOYMENT_ID}' already exists"
 
-    GCLOUD_PROJECT_INFO_JSON="$(gcloud projects describe "${DEPLOYMENT_ID}" --format=json 2>/dev/null || echo '{}')"
-    export GCLOUD_PROJECT_INFO_JSON
-    log "GCLOUD_PROJECT_INFO_JSON=${GCLOUD_PROJECT_INFO_JSON}"
+	export GCLOUD_BILLING_JSON="{}"
+    export GCLOUD_CONFIG_JSON="{}"
+    export GCLOUD_PROJECT_INFO_JSON="$(gcloud projects describe "${DEPLOYMENT_ID}" --format=json 2>/dev/null || echo '{}')"
 
     if [[ -n "${GCLOUD_PROJECT_INFO_JSON:-}" && "${GCLOUD_PROJECT_INFO_JSON}" != "{}" ]]; then
         local state="$(jq -er '.lifecycleState' <<<"$GCLOUD_PROJECT_INFO_JSON")"
@@ -217,7 +272,6 @@ ensure_project(){
         fi
 
         GCLOUD_BILLING_JSON="$(gcloud billing projects describe "${DEPLOYMENT_ID}" --format=json 2>/dev/null || echo '{}')"
-        export GCLOUD_BILLING_JSON
         local billing_enabled="$(jq -r '.billingEnabled // false' <<<"$GCLOUD_BILLING_JSON")"
 
         if [[ "$billing_enabled" != "true" ]]; then
@@ -233,19 +287,17 @@ ensure_project(){
         gcloud billing projects link "${DEPLOYMENT_ID}" --billing-account "${BILLING_ACCOUNT}"
 
         GCLOUD_PROJECT_INFO_JSON="$(gcloud projects describe "${DEPLOYMENT_ID}" --format=json)"
-        export GCLOUD_PROJECT_INFO_JSON
         log "GCLOUD_PROJECT_INFO_JSON=${GCLOUD_PROJECT_INFO_JSON}"
 
         GCLOUD_BILLING_JSON="$(gcloud billing projects describe "${DEPLOYMENT_ID}" --format=json)"
-        export GCLOUD_BILLING_JSON
 #    else
 #        die "unknown (auth/perm/config issue)" 2
     fi
+    log "GCLOUD_PROJECT_INFO_JSON=${GCLOUD_PROJECT_INFO_JSON}"
     log "GCLOUD_BILLING_JSON=${GCLOUD_BILLING_JSON}"
 
     if [[ -z "${GCLOUD_POLICY_JSON:-}" ]]; then
         GCLOUD_POLICY_JSON="$(gcloud projects get-iam-policy "${DEPLOYMENT_ID}" --format=json 2>/dev/null || echo '{}')"
-        export GCLOUD_POLICY_JSON
     fi
     log "GCLOUD_POLICY_JSON=${GCLOUD_POLICY_JSON}"
 
@@ -253,7 +305,6 @@ ensure_project(){
 
     if [[ -z "${GCLOUD_CONFIG_JSON:-}" ]]; then
         GCLOUD_CONFIG_JSON="$(gcloud config list --format=json 2>/dev/null || echo '{}')"
-        export GCLOUD_CONFIG_JSON
     fi
     log "GCLOUD_CONFIG_JSON=${GCLOUD_CONFIG_JSON}"
 
@@ -279,7 +330,6 @@ ensure_project(){
     if [[ "$cur_project" != "$DEPLOYMENT_ID" ]]; then
         gcloud config set project "$DEPLOYMENT_ID" >/dev/null
         GCLOUD_CONFIG_JSON="$(jq -c --arg v "$DEPLOYMENT_ID" '.core.project = $v' <<<"$GCLOUD_CONFIG_JSON")"
-        export GCLOUD_CONFIG_JSON
     fi
 
     log "Verify/Set region → $REGION"
@@ -288,7 +338,6 @@ ensure_project(){
     if [[ "$cur_run_region" != "$REGION" ]]; then
         gcloud config set run/region "$REGION" >/dev/null
         GCLOUD_CONFIG_JSON="$(jq -c --arg v "$REGION" '.run.region = $v' <<<"$GCLOUD_CONFIG_JSON")"
-        export GCLOUD_CONFIG_JSON
     fi
 
     log "Verify/Set artifacts.location → $REGION"
@@ -297,7 +346,6 @@ ensure_project(){
     if [[ "$cur_ar_loc" != "$REGION" ]]; then
         gcloud config set artifacts/location "$REGION" >/dev/null
         GCLOUD_CONFIG_JSON="$(jq -c --arg v "$REGION" '.artifacts.location = $v' <<<"$GCLOUD_CONFIG_JSON")"
-        export GCLOUD_CONFIG_JSON
     fi
 
     return 0
@@ -413,47 +461,8 @@ ensure_project_roles() {
     log INFO "pm-provision-gcp: operator roles ready"
 }
 
-ensure_scheduler() {
-  if [[ -z "${SCHED_NAME:-}" ]]; then
-     log "SCHED_NAME is undefined; skipping Cloud Scheduler creation"
-    return 0
-  fi
-
-  local run_url="https://run.googleapis.com/v2/projects/${DEPLOYMENT_ID}/locations/${REGION}/jobs/${RUN_JOB}:run"
-  local body='{}'
-
-  log "Ensuring Cloud Scheduler job exists: ${SCHED_NAME}"
-  if gcloud scheduler jobs describe "$SCHED_NAME" --location "$REGION" >/dev/null 2>&1; then
-    log "Updating Cloud Scheduler job: ${SCHED_NAME}"
-    gcloud scheduler jobs update http "$SCHED_NAME" \
-      --location "$REGION" \
-      --schedule "$SCHEDULE_CRON" \
-      --time-zone "$SCHED_TIMEZONE" \
-      --uri "$run_url" \
-      --http-method POST \
-      --update-headers "Content-Type=application/json" \
-      --message-body "$body" \
-      --oauth-service-account-email "$SCHED_SA" \
-      >/dev/null
-  else
-    log "Creating Cloud Scheduler job: ${SCHED_NAME}"
-    gcloud scheduler jobs create http "$SCHED_NAME" \
-      --location "$REGION" \
-      --schedule "$SCHEDULE_CRON" \
-      --time-zone "$SCHED_TIMEZONE" \
-      --uri "$run_url" \
-      --http-method POST \
-      --headers "Content-Type=application/json" \
-      --message-body "$body" \
-      --oauth-service-account-email "$SCHED_SA" \
-      >/dev/null
-  fi
-
-    return 0
-}
-
 ensure_service_accounts() {
-    pm_compose_load_model
+    pm_gcp_load_deployable_services || return 1
     local service role email
 
     if [[ -z "${GCLOUD_SERVICE_ACCOUNT_EMAILS:-}" ]]; then
@@ -471,7 +480,7 @@ ensure_service_accounts() {
         email="$(format_sa_email "$service")"
         ensure_service_account "$email" "${email%@*}" \
             "Portmason ${role} service account for ${STACK}"
-    done < <(pm_compose_deployable_services_tsv)
+    done <<<"$PM_GCP_DEPLOYABLE_SERVICES_TSV"
     log INFO "pm-provision-gcp: runtime service accounts ready"
 }
 
@@ -631,8 +640,6 @@ pm_provision_runtime_platform() {
 
     log DEBUG "pm-provision-gcp: legacy ensure_sql skipped; database lifecycle is coordinated separately"
 
-    ensure_scheduler
-
     bind_permissions
 
     log "Done."
@@ -694,6 +701,77 @@ pm_gcp_resolve_cloud_sql_connection() {
         "instance=$instance" "connection=$connection"
 }
 
+pm_gcp_telemetry_database_requested() {
+    [[ -n "${TELEMETRY_DB_NAME:-}" \
+        || -n "${TELEMETRY_DB_USER:-}" \
+        || -n "${TELEMETRY_DB_PASSWORD:-}" \
+        || -n "${TELEMETRY_CLOUD_SQL_INSTANCE:-}" ]]
+}
+
+pm_gcp_telemetry_cloud_sql_instance_name() {
+    local out_var="${1:?output variable required}"
+    local value="${TELEMETRY_CLOUD_SQL_INSTANCE:-${STACK:-portmason}-telemetry-postgres}"
+    value="${value,,}"
+    value="$(printf '%s' "$value" | sed 's/[^a-z0-9-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
+    [[ "$value" =~ ^[a-z] ]] || value="p-${value}"
+    printf -v "$out_var" '%s' "${value:0:63}"
+}
+
+pm_gcp_resolve_telemetry_cloud_sql_connection() {
+    local instance="${1:?instance required}"
+    local connection
+    connection="$(gcloud sql instances describe "$instance" \
+        --project "$DEPLOYMENT_ID" \
+        --format='value(connectionName)')"
+    [[ -n "$connection" ]] \
+        || die "Unable to resolve Cloud SQL connection name for telemetry instance $instance" 2
+    env_init_set TELEMETRY_CLOUD_SQL_CONNECTION_NAME "$connection"
+    log INFO "pm-provision-gcp: resolved telemetry Cloud SQL connection" \
+        "instance=$instance" "connection=$connection"
+}
+
+pm_gcp_provision_telemetry_database_platform() {
+    pm_gcp_telemetry_database_requested || return 0
+
+    local key hydrated
+    for key in TELEMETRY_DB_USER TELEMETRY_DB_PASSWORD; do
+        if { [[ -z "${!key:-}" ]] || pm_secret_value_is_sentinel "${!key}"; } && pm_config_secret_override_exists "$key"; then
+            pm_gcp_get_secret_value hydrated "$key" \
+                || die "Unable to load telemetry database secret override: $key" 2
+            env_init_set "$key" "$hydrated"
+            log INFO "pm-provision-gcp: loaded telemetry database value from secret override" \
+                "key=$key"
+        fi
+    done
+
+    : "${TELEMETRY_DB_NAME:?TELEMETRY_DB_NAME required when telemetry database is configured}"
+    : "${TELEMETRY_DB_USER:?TELEMETRY_DB_USER required when telemetry database is configured}"
+    : "${TELEMETRY_DB_PASSWORD:?TELEMETRY_DB_PASSWORD required when telemetry database is configured}"
+    : "${DB_ADMIN_USER:?DB_ADMIN_USER required before telemetry database provisioning}"
+    : "${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD required before telemetry database provisioning}"
+
+    local instance
+    pm_gcp_telemetry_cloud_sql_instance_name instance
+    env_init_set TELEMETRY_CLOUD_SQL_INSTANCE "$instance"
+
+    pm_gcp_ensure_postgres_instance "$instance"
+
+    log INFO "pm-provision-gcp: ensuring telemetry PostgreSQL administrative password" \
+        "instance=$instance" "user=$DB_ADMIN_USER"
+    gcloud sql users set-password "$DB_ADMIN_USER" \
+        --project "$DEPLOYMENT_ID" \
+        --instance "$instance" \
+        --password "$DB_ADMIN_PASSWORD" \
+        --quiet >/dev/null
+
+    pm_gcp_resolve_telemetry_cloud_sql_connection "$instance"
+    env_init_set TELEMETRY_DB_PORT "${TELEMETRY_DB_PORT:-5432}"
+
+    log INFO "pm-provision-gcp: telemetry database platform provisioning complete" \
+        "instance=$TELEMETRY_CLOUD_SQL_INSTANCE" \
+        "connection=$TELEMETRY_CLOUD_SQL_CONNECTION_NAME"
+}
+
 pm_provision_db_platform() {
     [[ "${DB_PLATFORM_CODE:-}" == "gcp" ]] \
         || die "pm-provision-gcp database entrypoint requires DB_PLATFORM_CODE=gcp" 2
@@ -715,7 +793,7 @@ pm_provision_db_platform() {
 
     local key hydrated
     for key in DB_USER DB_PASSWORD; do
-        if [[ -z "${!key:-}" ]] && pm_preflight_has_secret_override "$key"; then
+        if { [[ -z "${!key:-}" ]] || pm_secret_value_is_sentinel "${!key}"; } && pm_config_secret_override_exists "$key"; then
             pm_gcp_get_secret_value hydrated "$key"                 || die "Unable to load required database secret override: $key" 2
             env_init_set "$key" "$hydrated"
             log INFO "pm-provision-gcp: loaded canonical database value from secret override"                 "key=$key"
@@ -743,6 +821,8 @@ pm_provision_db_platform() {
     pm_gcp_resolve_cloud_sql_connection "$instance"
     env_init_set DB_PORT "${DB_PORT:-5432}"
 
+    pm_gcp_provision_telemetry_database_platform
+
     log INFO "pm-provision-gcp: database platform provisioning complete" \
         "instance=$CLOUD_SQL_INSTANCE" \
         "connection=$CLOUD_SQL_CONNECTION_NAME"
@@ -752,6 +832,4 @@ main() {
     pm_provision_runtime_platform "$@"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+main "$@"

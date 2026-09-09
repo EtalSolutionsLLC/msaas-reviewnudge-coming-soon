@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+# shellcheck disable=SC1091
+. "${PORTMASON_SHARE}/pm-helpers" --minimal
+
+usage() {
+    cat <<'USAGE'
+Usage: pm-status [project-status arguments]
+
+Run the current site's operational status provider.
+
+The command must be run from the site root containing an executable
+mgt-scripts/status provider. For environment deployments, run it from the
+corresponding site root, such as deploy/prd.
+USAGE
+}
+
+resolve_repo_root() {
+    local root
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" \
+        || die "pm-status must be run from inside a Git repository" 2
+    cd -- "$root"
+    pwd -P
+}
+
+resolve_site_root() {
+    pwd -P
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help)
+            usage
+            return 0
+            ;;
+    esac
+
+    local repo_root site_root provider
+    repo_root="$(resolve_repo_root)"
+    site_root="$(resolve_site_root)"
+
+    case "${site_root}/" in
+        "${repo_root}/"*)
+            ;;
+        *)
+            die "site root is outside the current Git repository: ${site_root}" 2
+            ;;
+    esac
+
+    provider="${site_root}/mgt-scripts/status"
+
+    [[ -f "$provider" ]] \
+        || die "site status provider not found: ${provider}" 2
+    [[ -x "$provider" ]] \
+        || die "site status provider is not executable: ${provider}" 2
+
+    log INFO "running site status" \
+        "repo_root=${repo_root}" \
+        "site_root=${site_root}" \
+        "provider=${provider}"
+    (
+        cd -- "$site_root"
+        exec "$provider" "$@"
+    )
+}
+
+main "$@"

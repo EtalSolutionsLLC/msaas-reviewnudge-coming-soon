@@ -7,7 +7,11 @@ set -euo pipefail
 pm_setup_arg MIGRATION_NAME "-n|--name" needs_value required export
 pm_commit_args "$@"
 
-COMPOSE_BAKE=0 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml run --rm -T \
+pm_compose_init_command
+tools_compose="${PROJECT_ROOT}/docker-compose.tools.yml"
+[[ -r "$tools_compose" ]] || die "Compose tools control file is not readable: $tools_compose" 2
+
+COMPOSE_BAKE=0 "${PM_COMPOSE_CMD[@]}" -f "$tools_compose" run --rm -T \
   -e MIGRATION_NAME \
   api-tools '
 set -euo pipefail

@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+"""Materialize Portmason publication collection selections."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import re
+import tempfile
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
+
+MD_FIELDS = ("title_md", "excerpt_md", "full_article_md")
+ITEM_DIR = re.compile(r"^[0-9]{3}$")
+ITEM_REFERENCE = re.compile(r"^[0-9]{3}$")
+FIRST_DISPLAY_FIELD = "dateFirstDisplayed"
+DISPLAY_AFTER_FIELD = "displayAfter"
+RESERVED_META_FIELDS = {
+    "id",
+    *MD_FIELDS,
+    "title",
+    "summary",
+    "body",
+    "excerpt",
+    "full_article",
+}
+INLINE_TOKEN = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))")
+HIDDEN_STATUSES = {"hidden", "archived", "retired"}
+
+
+@dataclass(frozen=True)
+class Selection:
+    selection_date: date
+    timezone: str
+    active_slot: int | None
+    week_of_month: int | None
+    items: list[dict[str, object]]
+    source_sha256: str
+
+
+def load_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def collection_prefix(manifest: dict[str, object]) -> str:
+    labels = manifest.get("labels")
+    if isinstance(labels, dict):
+        value = labels.get("itemPrefix")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    collection_id = str(manifest.get("id") or "item")
+    initials = "".join(part[0] for part in re.split(r"[^A-Za-z0-9]+", collection_id) if part)
+    return (initials or "item").upper()
+
+
+def default_slug(manifest: dict[str, object], item_id: int) -> str:
+    return f"{collection_prefix(manifest).lower()}-{item_id:03d}"
+
+
+def discover_publication_items(
+    collection_path: Path,
+    manifest: dict[str, object],
+) -> tuple[Path, list[dict[str, object]], bytes]:
+    items_root = collection_path.parent / "items"
+    if not items_root.is_dir():
+        raise ValueError(f"Publication items directory does not exist: {items_root}")
+
+    items: list[dict[str, object]] = []
+    for item_dir in sorted(path for path in items_root.iterdir() if path.is_dir()):
+        if not ITEM_DIR.fullmatch(item_dir.name):
+            raise ValueError(f"Publication item directory must use a three-digit id: {item_dir.name}")
+        item_id = int(item_dir.name)
+        if item_id < 1:
+            raise ValueError("Publication item ids must be positive")
+
+        meta_path = item_dir / "meta.json"
+        if not meta_path.is_file():
+            raise ValueError(f"Publication item metadata does not exist: {meta_path}")
+        meta = load_json(meta_path)
+        if not isinstance(meta, dict):
+            raise ValueError(f"Publication item metadata must be an object: {meta_path}")
+        reserved = sorted(RESERVED_META_FIELDS.intersection(meta))
+        if reserved:
+            raise ValueError(
+                f"Publication item metadata contains build-derived fields ({', '.join(reserved)}): {meta_path}"
+            )
+
+        relative_dir = item_dir.relative_to(collection_path.parent).as_posix()
+        item = dict(meta)
+        item.update({
+            "id": item_id,
+            "slug": str(meta.get("slug") or default_slug(manifest, item_id)),
+            "title_md": f"{relative_dir}/title.md",
+            "excerpt_md": f"{relative_dir}/excerpt.md",
+            "full_article_md": f"{relative_dir}/full-article.md",
+        })
+        items.append(item)
+
+    if not items:
+        raise ValueError(f"Publication collection is empty: {collection_path}")
+    canonical_items = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return items_root, items, canonical_items
+
+
+def collection_context(collection_path: Path) -> tuple[dict[str, object], Path, list[dict[str, object]], bytes, bytes]:
+    manifest_raw = collection_path.read_bytes()
+    manifest = json.loads(manifest_raw.decode("utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Collection manifest must be an object: {collection_path}")
+    if manifest.get("mode") != "publication":
+        raise ValueError(f"Collection is not a publication collection: {collection_path}")
+    if "dataFile" in manifest:
+        raise ValueError(f"Publication items are discovered from items/*/meta.json: {collection_path}")
+    items_root, items, items_raw = discover_publication_items(collection_path, manifest)
+    return manifest, items_root, items, manifest_raw, items_raw
+
+
+def resolve_markdown_path(collection_path: Path, ref: object) -> Path:
+    if not isinstance(ref, str) or not ref.strip() or not ref.endswith(".md"):
+        raise ValueError("Every editorial content reference must be a non-empty .md path")
+    collection_dir = collection_path.parent.resolve()
+    candidate = (collection_dir / ref).resolve()
+    try:
+        candidate.relative_to(collection_dir)
+    except ValueError as exc:
+        raise ValueError(f"Markdown reference escapes its collection: {ref}") from exc
+    return candidate
+
+
+def read_markdown(collection_path: Path, ref: object) -> str:
+    path = resolve_markdown_path(collection_path, ref)
+    if not path.is_file():
+        raise ValueError(f"Markdown file does not exist: {ref}")
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Markdown file is empty: {ref}")
+    return text
+
+
+def plain_markdown(text: str) -> str:
+    value = re.sub(r"`([^`]+)`", r"\1", text)
+    value = re.sub(r"\*\*([^*]+)\*\*", r"\1", value)
+    value = re.sub(r"\*([^*]+)\*", r"\1", value)
+    value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def safe_href(value: str) -> str | None:
+    lowered = value.strip().lower()
+    return value.strip() if lowered.startswith(("https://", "http://", "mailto:", "/", "#")) else None
+
+
+def render_inline_markdown(text: str) -> str:
+    value = " ".join(text.strip().splitlines())
+    output: list[str] = []
+    cursor = 0
+    for match in INLINE_TOKEN.finditer(value):
+        output.append(html.escape(value[cursor:match.start()]))
+        token = match.group(0)
+        if token.startswith("`"):
+            output.append(f"<code>{html.escape(token[1:-1])}</code>")
+        elif token.startswith("**"):
+            output.append(f"<strong>{html.escape(token[2:-2])}</strong>")
+        elif token.startswith("*"):
+            output.append(f"<em>{html.escape(token[1:-1])}</em>")
+        else:
+            link_match = re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", token)
+            if not link_match:
+                output.append(html.escape(token))
+            else:
+                label, href = link_match.groups()
+                safe = safe_href(href)
+                output.append(
+                    f'<a href="{html.escape(safe, quote=True)}">{html.escape(label)}</a>'
+                    if safe else html.escape(label)
+                )
+        cursor = match.end()
+    output.append(html.escape(value[cursor:]))
+    return "".join(output)
+
+
+def source_sha256(manifest_raw: bytes, items_raw: bytes, collection_path: Path, items: list[dict[str, object]]) -> str:
+    digest = hashlib.sha256(manifest_raw + items_raw)
+    for item in items:
+        for field in MD_FIELDS:
+            digest.update(resolve_markdown_path(collection_path, item[field]).read_bytes())
+    return digest.hexdigest()
+
+
+def item_url(manifest: dict[str, object], item: dict[str, object], title_text: str) -> str:
+    for key in ("url", "href"):
+        value = item.get(key)
+        if isinstance(value, str) and safe_href(value):
+            return value.strip()
+    action = item.get("primaryAction")
+    if isinstance(action, dict):
+        href = action.get("href")
+        if isinstance(href, str) and safe_href(href):
+            return href.strip()
+    request = manifest.get("request")
+    if isinstance(request, dict):
+        email = request.get("email")
+        subject_template = str(request.get("subject") or "{prefix}-{id}: {title}")
+        body_template = str(request.get("body") or "Please send {prefix}-{id}: {title}")
+        if isinstance(email, str) and email.strip():
+            prefix = collection_prefix(manifest)
+            token_values = {
+                "prefix": prefix,
+                "id": f"{int(item['id']):03d}",
+                "title": title_text,
+                "collection": str(manifest.get("id") or ""),
+            }
+            subject = subject_template.format(**token_values)
+            body = body_template.format(**token_values)
+            return "mailto:" + email.strip() + "?subject=" + quote(subject) + "&body=" + quote(body)
+    section_href = manifest.get("sectionHref")
+    if isinstance(section_href, str) and safe_href(section_href):
+        return section_href.strip()
+    return "/#" + str(manifest.get("id") or "publication")
+
+
+def hydrate_item(item: dict[str, object], collection_path: Path, manifest: dict[str, object]) -> dict[str, object]:
+    title_md = read_markdown(collection_path, item["title_md"])
+    excerpt_md = read_markdown(collection_path, item["excerpt_md"])
+    read_markdown(collection_path, item["full_article_md"])
+    title_text = plain_markdown(title_md)
+    hydrated = dict(item)
+    hydrated.update({
+        "title": title_text,
+        "title_html": render_inline_markdown(title_md),
+        "excerpt": plain_markdown(excerpt_md),
+        "excerpt_html": render_inline_markdown(excerpt_md),
+        "url": item_url(manifest, item, title_text),
+    })
+    return hydrated
+
+
+def parse_iso_date(value: object, field: str, item_id: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Publication item {item_id:03d} {field} must be null or an ISO date")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Publication item {item_id:03d} {field} must use YYYY-MM-DD") from exc
+    if parsed.isoformat() != value:
+        raise ValueError(f"Publication item {item_id:03d} {field} must use YYYY-MM-DD")
+    return value
+
+
+def normalize_dependencies(item: dict[str, object], item_id: int) -> list[str]:
+    raw_dependencies = item.get(DISPLAY_AFTER_FIELD, [])
+    if not isinstance(raw_dependencies, list):
+        raise ValueError(f"Publication item {item_id:03d} {DISPLAY_AFTER_FIELD} must be an array")
+    dependencies: list[str] = []
+    for ref in raw_dependencies:
+        if not isinstance(ref, str) or not ITEM_REFERENCE.fullmatch(ref):
+            raise ValueError(
+                f"Publication item {item_id:03d} {DISPLAY_AFTER_FIELD} values must be three-digit ids"
+            )
+        if ref in dependencies:
+            raise ValueError(f"Publication item {item_id:03d} has duplicate predecessor {ref}")
+        dependencies.append(ref)
+    return dependencies
+
+
+def validate_dependency_graph(items: list[dict[str, object]]) -> None:
+    by_id = {int(item["id"]): item for item in items}
+    for item in items:
+        item_id = int(item["id"])
+        for ref in item[DISPLAY_AFTER_FIELD]:
+            predecessor_id = int(str(ref))
+            if predecessor_id not in by_id:
+                raise ValueError(
+                    f"Publication item {item_id:03d} references missing predecessor {predecessor_id:03d}"
+                )
+            if predecessor_id == item_id:
+                raise ValueError(f"Publication item {item_id:03d} cannot depend on itself")
+
+    state: dict[int, int] = {}
+    trail: list[int] = []
+
+    def visit(item_id: int) -> None:
+        current = state.get(item_id, 0)
+        if current == 2:
+            return
+        if current == 1:
+            cycle_start = trail.index(item_id)
+            cycle = trail[cycle_start:] + [item_id]
+            label = " -> ".join(f"{entry:03d}" for entry in cycle)
+            raise ValueError(f"Publication display dependency cycle detected: {label}")
+        state[item_id] = 1
+        trail.append(item_id)
+        for ref in by_id[item_id][DISPLAY_AFTER_FIELD]:
+            visit(int(str(ref)))
+        trail.pop()
+        state[item_id] = 2
+
+    for item_id in by_id:
+        visit(item_id)
+
+
+def validate_items(items: object, collection_path: Path, manifest: dict[str, object]) -> list[dict[str, object]]:
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"Publication collection is empty: {collection_path}")
+    ids: set[int] = set()
+    slugs: set[str] = set()
+    validated: list[dict[str, object]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Each publication item must be an object")
+        item_id = item.get("id")
+        if not isinstance(item_id, int) or item_id < 1:
+            raise ValueError("Every publication item needs a positive numeric id")
+        if item_id in ids:
+            raise ValueError("Publication item ids must be unique")
+        slug = item.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            raise ValueError(f"Publication item {item_id:03d} needs a slug")
+        if slug in slugs:
+            raise ValueError(f"Publication item slug must be unique: {slug}")
+        if not isinstance(item.get("category"), str) or not str(item["category"]).strip():
+            raise ValueError("Every publication item needs a category")
+        if not isinstance(item.get("status"), str) or not str(item["status"]).strip():
+            raise ValueError("Every publication item needs a status")
+        for field in MD_FIELDS:
+            read_markdown(collection_path, item.get(field))
+        if any(field in item for field in ("body", "summary", "title")):
+            raise ValueError("Editorial display content must live in Markdown files")
+
+        normalized = dict(item)
+        normalized[FIRST_DISPLAY_FIELD] = parse_iso_date(item.get(FIRST_DISPLAY_FIELD), FIRST_DISPLAY_FIELD, item_id)
+        normalized["publishDate"] = parse_iso_date(item.get("publishDate"), "publishDate", item_id)
+        normalized[DISPLAY_AFTER_FIELD] = normalize_dependencies(item, item_id)
+        ids.add(item_id)
+        slugs.add(slug)
+        validated.append(normalized)
+
+    validate_dependency_graph(validated)
+    return validated
+
+
+def is_display_eligible(item: dict[str, object], items_by_id: dict[int, dict[str, object]]) -> bool:
+    status = str(item.get("status") or "").lower()
+    if status in HIDDEN_STATUSES:
+        return False
+    return all(
+        items_by_id[int(str(ref))][FIRST_DISPLAY_FIELD] is not None
+        for ref in item[DISPLAY_AFTER_FIELD]
+    )
+
+
+def week_of_month(selection_date: date) -> int:
+    return ((selection_date.day - 1) // 7) + 1
+
+
+def slot_cycle(active_slot: int) -> list[int]:
+    return [((active_slot - 1 + offset) % 7) + 1 for offset in range(7)]
+
+
+def slot_batch(items: list[dict[str, object]], slot: int, month_week: int) -> list[dict[str, object]]:
+    matches = [item for item in items if int(item["slot"]) == slot]
+    if not matches:
+        return []
+    batches = [matches[offset:offset + 3] for offset in range(0, len(matches), 3)]
+    return batches[(month_week - 1) % len(batches)]
+
+
+def select_weekday_week_of_month(
+    manifest: dict[str, object],
+    items: list[dict[str, object]],
+    manifest_raw: bytes,
+    items_raw: bytes,
+    selection_date: date,
+    collection_path: Path,
+) -> Selection:
+    validated = validate_items(items, collection_path, manifest)
+    for item in validated:
+        slot = item.get("slot")
+        if not isinstance(slot, int) or not 1 <= slot <= 7:
+            raise ValueError("Every weekday-week-of-month publication item slot must be between 1 and 7")
+    selection_cfg = manifest.get("selection")
+    if not isinstance(selection_cfg, dict):
+        raise ValueError("Publication selection configuration is required")
+    timezone = str(selection_cfg.get("timezone") or "America/New_York")
+    items_by_id = {int(item["id"]): item for item in validated}
+    eligible = [item for item in validated if is_display_eligible(item, items_by_id)]
+    if not eligible:
+        raise ValueError(f"No publication articles are eligible for display: {collection_path}")
+    visible = max(1, min(int(selection_cfg.get("visibleItems", 3)), len(eligible)))
+    active_slot = selection_date.isoweekday()
+    month_week = week_of_month(selection_date)
+    selected: list[dict[str, object]] = []
+    seen: set[int] = set()
+    for slot in slot_cycle(active_slot):
+        for item in slot_batch(eligible, slot, month_week):
+            if int(item["id"]) in seen:
+                continue
+            selected.append(item)
+            seen.add(int(item["id"]))
+            if len(selected) == visible:
+                return Selection(
+                    selection_date,
+                    timezone,
+                    active_slot,
+                    month_week,
+                    [hydrate_item(entry, collection_path, manifest) for entry in selected],
+                    source_sha256(manifest_raw, items_raw, collection_path, validated),
+                )
+    for item in eligible:
+        if int(item["id"]) in seen:
+            continue
+        selected.append(item)
+        seen.add(int(item["id"]))
+        if len(selected) == visible:
+            break
+    return Selection(
+        selection_date,
+        timezone,
+        active_slot,
+        month_week,
+        [hydrate_item(entry, collection_path, manifest) for entry in selected],
+        source_sha256(manifest_raw, items_raw, collection_path, validated),
+    )
+
+
+def latest_sort_key(item: dict[str, object]) -> tuple[date, int]:
+    date_text = item.get("publishDate") or item.get(FIRST_DISPLAY_FIELD)
+    parsed = date.min
+    if isinstance(date_text, str):
+        parsed = date.fromisoformat(date_text)
+    return parsed, int(item["id"])
+
+
+def select_latest(
+    manifest: dict[str, object],
+    items: list[dict[str, object]],
+    manifest_raw: bytes,
+    items_raw: bytes,
+    selection_date: date,
+    collection_path: Path,
+) -> Selection:
+    validated = validate_items(items, collection_path, manifest)
+    selection_cfg = manifest.get("selection")
+    if not isinstance(selection_cfg, dict):
+        raise ValueError("Publication selection configuration is required")
+    timezone = str(selection_cfg.get("timezone") or "America/Los_Angeles")
+    items_by_id = {int(item["id"]): item for item in validated}
+    eligible = [item for item in validated if is_display_eligible(item, items_by_id)]
+    if not eligible:
+        raise ValueError(f"No publication articles are eligible for display: {collection_path}")
+    visible = max(1, min(int(selection_cfg.get("visibleItems", 1)), len(eligible)))
+    selected = sorted(eligible, key=latest_sort_key, reverse=True)[:visible]
+    return Selection(
+        selection_date,
+        timezone,
+        None,
+        None,
+        [hydrate_item(entry, collection_path, manifest) for entry in selected],
+        source_sha256(manifest_raw, items_raw, collection_path, validated),
+    )
+
+
+def public_item(item: dict[str, object]) -> dict[str, object]:
+    keys = [
+        "id", "slug", "slot", "category", "status", "publishDate",
+        FIRST_DISPLAY_FIELD, DISPLAY_AFTER_FIELD,
+        "title_md", "excerpt_md", "full_article_md",
+        "title", "title_html", "excerpt", "excerpt_html", "url",
+    ]
+    return {key: item.get(key) for key in keys if key in item}
+
+
+def record_first_displayed(
+    collection_path: Path,
+    selected_items: list[dict[str, object]],
+    selected_date: date,
+) -> list[Path]:
+    changed: list[Path] = []
+    for item in selected_items:
+        item_id = int(item["id"])
+        meta_path = collection_path.parent / "items" / f"{item_id:03d}" / "meta.json"
+        meta = load_json(meta_path)
+        if not isinstance(meta, dict):
+            raise ValueError(f"Publication item metadata must be an object: {meta_path}")
+        if meta.get(FIRST_DISPLAY_FIELD) is not None:
+            continue
+        meta[FIRST_DISPLAY_FIELD] = selected_date.isoformat()
+        if DISPLAY_AFTER_FIELD not in meta:
+            meta[DISPLAY_AFTER_FIELD] = []
+        atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+        changed.append(meta_path)
+    return changed
+
+
+def select_items(
+    manifest: dict[str, object],
+    items: list[dict[str, object]],
+    manifest_raw: bytes,
+    items_raw: bytes,
+    selection_date: date,
+    collection_path: Path,
+) -> Selection:
+    selection_cfg = manifest.get("selection")
+    if not isinstance(selection_cfg, dict):
+        raise ValueError("Publication selection configuration is required")
+    strategy = str(selection_cfg.get("strategy") or "latest")
+    if strategy == "weekday-week-of-month":
+        return select_weekday_week_of_month(manifest, items, manifest_raw, items_raw, selection_date, collection_path)
+    if strategy == "latest":
+        return select_latest(manifest, items, manifest_raw, items_raw, selection_date, collection_path)
+    raise ValueError(f"Unsupported publication selection strategy: {strategy}")
+
+
+def materialize(collection_path: Path, selection_path: Path | None, selected_date: date) -> Path:
+    manifest, _items_path, items, manifest_raw, items_raw = collection_context(collection_path)
+    selection_cfg = manifest.get("selection")
+    if not isinstance(selection_cfg, dict):
+        raise ValueError("Publication selection configuration is required")
+    output_path = selection_path or (collection_path.parent / str(selection_cfg.get("outputFile") or "generated/selection.json"))
+    selection = select_items(manifest, items, manifest_raw, items_raw, selected_date, collection_path)
+
+    record_first_displayed(collection_path, selection.items, selected_date)
+
+    _updated_root, updated_items, updated_items_raw = discover_publication_items(collection_path, manifest)
+    updated_validated = validate_items(updated_items, collection_path, manifest)
+    updated_by_id = {int(item["id"]): item for item in updated_validated}
+    selected_items = [
+        hydrate_item(updated_by_id[int(item["id"])], collection_path, manifest)
+        for item in selection.items
+    ]
+
+    output: dict[str, object] = {
+        "generated_by": "pm-materialize-publication-collections",
+        "collection": str(manifest["id"]),
+        "selection_date": selection.selection_date.isoformat(),
+        "rotation_timezone": selection.timezone,
+        "source_sha256": source_sha256(manifest_raw, updated_items_raw, collection_path, updated_validated),
+        "visibleItems": [public_item(item) for item in selected_items],
+    }
+    if selection.active_slot is not None:
+        output["active_slot"] = selection.active_slot
+    if selection.week_of_month is not None:
+        output["week_of_month"] = selection.week_of_month
+
+    atomic_write(output_path, json.dumps(output, indent=2, ensure_ascii=False) + "\n")
+    return output_path
+
+
+def collection_paths(site_dir: Path, explicit_collection: Path | None) -> list[Path]:
+    if explicit_collection is not None:
+        return [explicit_collection]
+    collections_root = site_dir / "collections"
+    if not collections_root.is_dir():
+        return []
+    paths: list[Path] = []
+    for collection_dir in sorted(path for path in collections_root.iterdir() if path.is_dir() and path.name != "_system"):
+        manifest_path = collection_dir / "collection.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = load_json(manifest_path)
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Collection manifest must be an object: {manifest_path}")
+        if manifest.get("mode") == "publication" and isinstance(manifest.get("selection"), dict):
+            paths.append(manifest_path)
+    return paths
+
+
+def selected_date_for_collection(manifest: dict[str, object], date_override: date | None) -> date:
+    if date_override is not None:
+        return date_override
+    selection_cfg = manifest.get("selection")
+    timezone = "UTC"
+    if isinstance(selection_cfg, dict):
+        timezone = str(selection_cfg.get("timezone") or timezone)
+    return datetime.now(ZoneInfo(timezone)).date()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--site-dir", type=Path, default=Path(os.environ.get("SITE_DIR", os.getcwd())))
+    parser.add_argument("--collection", type=Path)
+    parser.add_argument("--selection", type=Path)
+    parser.add_argument("--date", type=date.fromisoformat, default=None)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    site_dir = args.site_dir.resolve()
+    materialized = 0
+    for collection_path in collection_paths(site_dir, args.collection):
+        manifest_raw = collection_path.read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Collection manifest must be an object: {collection_path}")
+        selected_date = selected_date_for_collection(manifest, args.date)
+        output_path = materialize(collection_path, args.selection, selected_date)
+        try:
+            label = output_path.relative_to(site_dir)
+        except ValueError:
+            label = output_path
+        print(f"Updated {label} for {selected_date.isoformat()}")
+        materialized += 1
+    if materialized == 0:
+        print(f"No publication collections to materialize under {site_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -7,7 +7,6 @@ if [[ "${__PM_HELPERS_POSTGRES_LOADED:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
 __PM_HELPERS_POSTGRES_LOADED=1
-export __PM_HELPERS_POSTGRES_LOADED
 
 pm_db_postgres_uri_decode() {
     local out_var="${1:?output variable required}"
@@ -19,14 +18,14 @@ pm_db_postgres_uri_decode() {
         result+="$prefix"
         value="${value#*%}"
         if [[ ! "$value" =~ ^([0-9A-Fa-f]{2})(.*)$ ]]; then
-            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid percent escape"
+            PM_DB_POSTGRES_PARSE_ERROR="DB_URL contains an invalid percent escape"
             export PM_DB_POSTGRES_PARSE_ERROR
             return 1
         fi
         hex="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
         if [[ "${hex,,}" == "00" ]]; then
-            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an unsupported NUL escape"
+            PM_DB_POSTGRES_PARSE_ERROR="DB_URL contains an unsupported NUL escape"
             export PM_DB_POSTGRES_PARSE_ERROR
             return 1
         fi
@@ -69,14 +68,14 @@ pm_db_postgres_parse_url() {
         postgres://*) remainder="${database_url#postgres://}" ;;
         postgresql://*) remainder="${database_url#postgresql://}" ;;
         *)
-            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must begin with postgres:// or postgresql://"
+            PM_DB_POSTGRES_PARSE_ERROR="DB_URL must begin with postgres:// or postgresql://"
             export PM_DB_POSTGRES_PARSE_ERROR
             return 1
             ;;
     esac
 
     if [[ "$remainder" != *@* ]]; then
-        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include user credentials"
+        PM_DB_POSTGRES_PARSE_ERROR="DB_URL must include user credentials"
         export PM_DB_POSTGRES_PARSE_ERROR
         return 1
     fi
@@ -84,7 +83,7 @@ pm_db_postgres_parse_url() {
     host_and_path="${remainder##*@}"
 
     if [[ "$userinfo" != *:* ]]; then
-        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include both user and password"
+        PM_DB_POSTGRES_PARSE_ERROR="DB_URL must include both user and password"
         export PM_DB_POSTGRES_PARSE_ERROR
         return 1
     fi
@@ -92,12 +91,12 @@ pm_db_postgres_parse_url() {
     encoded_password="${userinfo#*:}"
 
     if [[ -z "$encoded_user" || -z "$encoded_password" ]]; then
-        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL credentials are incomplete"
+        PM_DB_POSTGRES_PARSE_ERROR="DB_URL credentials are incomplete"
         export PM_DB_POSTGRES_PARSE_ERROR
         return 1
     fi
     if [[ "$host_and_path" != */* ]]; then
-        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL must include a database name"
+        PM_DB_POSTGRES_PARSE_ERROR="DB_URL must include a database name"
         export PM_DB_POSTGRES_PARSE_ERROR
         return 1
     fi
@@ -109,7 +108,7 @@ pm_db_postgres_parse_url() {
 
     if [[ "$authority" == \[* ]]; then
         if [[ "$authority" != *\]* ]]; then
-            PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid IPv6 host"
+            PM_DB_POSTGRES_PARSE_ERROR="DB_URL contains an invalid IPv6 host"
             export PM_DB_POSTGRES_PARSE_ERROR
             return 1
         fi
@@ -120,7 +119,7 @@ pm_db_postgres_parse_url() {
             "") port="5432" ;;
             :*) port="${suffix#:}" ;;
             *)
-                PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL contains an invalid host/port"
+                PM_DB_POSTGRES_PARSE_ERROR="DB_URL contains an invalid host/port"
                 export PM_DB_POSTGRES_PARSE_ERROR
                 return 1
                 ;;
@@ -134,7 +133,7 @@ pm_db_postgres_parse_url() {
     fi
 
     if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        PM_DB_POSTGRES_PARSE_ERROR="DATABASE_URL port must be an integer between 1 and 65535"
+        PM_DB_POSTGRES_PARSE_ERROR="DB_URL port must be an integer between 1 and 65535"
         export PM_DB_POSTGRES_PARSE_ERROR
         return 1
     fi
@@ -157,7 +156,7 @@ pm_db_postgres_build_url() {
     local database="${4:?database required}"
     local user="${5:?user required}"
     local password="${6:?password required}"
-    local sslmode="${7:-${DATABASE_SSL_MODE:-disable}}"
+    local sslmode="${7:-${DB_SSL_MODE:-disable}}"
     local user_enc pass_enc db_enc result
 
     pm_db_postgres_uri_encode user_enc "$user"
@@ -217,31 +216,42 @@ pm_db_postgres_parse_url_into() {
     (( had_name )) && DB_NAME="$save_name" || unset DB_NAME
 }
 
-pm_db_provider_preflight() {
-    [[ "${DB_PROVIDER_CODE:-}" == "postgres" ]] || return 0
+pm_db_postgres_run_sql() {
+    local sql="${1:?pm-run-sql: SQL statement required}"
 
-    if [[ -n "${DB_NAME:-}" ]] && ! pm_db_postgres_validate_identifier "$DB_NAME"; then
-        pm_preflight_error "database.provider" "DB_NAME" \
-            "must be a valid PostgreSQL identifier of no more than 63 characters"
-    fi
-    if [[ -n "${DB_USER:-}" ]] && ! pm_db_postgres_validate_identifier "$DB_USER"; then
-        pm_preflight_error "database.provider" "DB_USER" \
-            "must be a valid PostgreSQL identifier of no more than 63 characters"
+    (( $# <= 2 )) || die "pm-run-sql accepts SQL and an optional legacy format argument" 2
+    db_rt --command "$sql"
+}
+
+db_rotate_token() {
+    local token_variable="${1:?database token variable required}"
+    local router="${PORTMASON_SHARE}/pm-rotate-token.py"
+    have python3 || die "python3 is required for token rotation" 2
+    [[ -r "$router" ]] \
+        || die "Python token rotation router is unavailable: $router" 2
+    python3 "$router" "$token_variable" || return $?
+    declare -F reset_connections >/dev/null 2>&1 \
+        || die "Database bridge does not implement reset_connections" 2
+    if ! ( reset_connections "$token_variable" ); then
+        log CRITICAL "credential committed; connection reset incomplete" \
+            "key=$token_variable" "platform=${DB_PLATFORM_CODE:-unknown}"
+        return 3
     fi
 }
+
 
 pm_db_provider_prepare() {
     [[ "${DB_PROVIDER_CODE:-}" == "postgres" ]] || return 0
 
     env_init_set DB_PORT "${DB_PORT:-5432}"
-    env_init_set DATABASE_SSL_MODE "${DATABASE_SSL_MODE:-disable}"
+    env_init_set DB_SSL_MODE "${DB_SSL_MODE:-disable}"
 
     if [[ -n "${DB_NAME:-}" && -n "${DB_USER:-}" && -n "${DB_PASSWORD:-}" ]]; then
-        if [[ -n "${DB_HOST:-}" && -z "${DATABASE_URL:-}" ]]; then
+        if [[ -n "${DB_HOST:-}" && -z "${DB_URL:-}" ]]; then
             local url
-            pm_db_postgres_build_url url "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" "$DATABASE_SSL_MODE"
-            env_init_set DATABASE_URL "$url"
-            log DEBUG "pm-helpers-postgres: built DATABASE_URL from canonical values" \
+            pm_db_postgres_build_url url "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" "$DB_SSL_MODE"
+            env_init_set DB_URL "$url"
+            log DEBUG "pm-helpers-postgres: built DB_URL from canonical values" \
                 "host=$DB_HOST" "port=$DB_PORT" "database=$DB_NAME"
         elif [[ -z "${DB_HOST:-}" ]]; then
             log DEBUG "pm-helpers-postgres: canonical identity/credentials present; platform will supply DB_HOST"
@@ -251,17 +261,17 @@ pm_db_provider_prepare() {
         return 0
     fi
 
-    if [[ -n "${DATABASE_URL:-}" ]]; then
-        if pm_db_postgres_parse_url "$DATABASE_URL"; then
+    if [[ -n "${DB_URL:-}" ]]; then
+        if pm_db_postgres_parse_url "$DB_URL"; then
             env_init_set DB_HOST "$DB_HOST"
             env_init_set DB_PORT "$DB_PORT"
             env_init_set DB_USER "$DB_USER"
             env_init_set DB_PASSWORD "$DB_PASSWORD"
             env_init_set DB_NAME "$DB_NAME"
-            log INFO "pm-helpers-postgres: derived canonical database configuration from DATABASE_URL" \
+            log INFO "pm-helpers-postgres: derived canonical database configuration from DB_URL" \
                 "host=$DB_HOST" "port=$DB_PORT" "database=$DB_NAME"
         else
-            log WARN "pm-helpers-postgres: DATABASE_URL could not be normalized; aggregate preflight will report it"
+            log WARN "pm-helpers-postgres: DB_URL could not be normalized; the consuming database operation will report it"
         fi
         return 0
     fi

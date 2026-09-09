@@ -7,11 +7,13 @@ import {
   normalizeBuildIdentity
 } from '../web/pm-build-info.js';
 
-test('Ctrl or Command + Shift + P opens the Build Identity command palette', () => {
-  assert.equal(isBuildInfoShortcut({ key: 'P', ctrlKey: true, shiftKey: true, altKey: false }), true);
-  assert.equal(isBuildInfoShortcut({ key: 'p', metaKey: true, shiftKey: true, altKey: false }), true);
-  assert.equal(isBuildInfoShortcut({ key: 'p', ctrlKey: true, shiftKey: false, altKey: false }), false);
-  assert.equal(isBuildInfoShortcut({ key: 'p', ctrlKey: true, shiftKey: true, altKey: true }), false);
+test('Ctrl or Command + Alt + M opens the Portmason command palette', () => {
+  assert.equal(isBuildInfoShortcut({ key: 'M', ctrlKey: true, shiftKey: false, altKey: true }), true);
+  assert.equal(isBuildInfoShortcut({ key: 'm', metaKey: true, shiftKey: false, altKey: true }), true);
+  assert.equal(isBuildInfoShortcut({ key: 'm', ctrlKey: true, shiftKey: false, altKey: false }), false);
+  assert.equal(isBuildInfoShortcut({ key: 'm', ctrlKey: true, shiftKey: true, altKey: true }), false);
+  assert.equal(isBuildInfoShortcut({ key: 'b', ctrlKey: true, shiftKey: false, altKey: true }), false);
+  assert.equal(isBuildInfoShortcut({ key: 'p', ctrlKey: true, shiftKey: true, altKey: false }), false);
 });
 
 test('normalization exposes only the canonical allowlisted build fields', () => {

@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+
+PM_COMPOSE_FILE="docker-compose.telemetry.yml"
+export PM_COMPOSE_FILE
+
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-telemetry" "$@"
+
+bootstrap_error() {
+    printf 'ERROR: pm-setup-telemetry bootstrap: %s\n' "$*" >&2
+    exit 2
+}
+
+resolve_context() {
+    local invocation_dir="${1:?invocation directory required}"
+    local repo_root relative deploy_tail deploy_env active_dir
+
+    command -v git >/dev/null 2>&1 \
+        || bootstrap_error "git is required to locate the repository root"
+
+    repo_root="$(git -C "$invocation_dir" rev-parse --show-toplevel 2>/dev/null)" \
+        || bootstrap_error "not inside a Git repository: $invocation_dir"
+
+    repo_root="$(cd -- "$repo_root" && pwd -P)"
+    invocation_dir="$(cd -- "$invocation_dir" && pwd -P)"
+
+    case "$invocation_dir" in
+        "$repo_root")
+            active_dir="$repo_root"
+            deploy_env=""
+            ;;
+        "$repo_root"/deploy/*)
+            relative="${invocation_dir#"$repo_root"/}"
+            deploy_tail="${relative#deploy/}"
+            deploy_env="${deploy_tail%%/*}"
+            [[ -n "$deploy_env" ]] \
+                || bootstrap_error "unable to resolve deployment environment from $invocation_dir"
+            active_dir="$repo_root/deploy/$deploy_env"
+            [[ -d "$active_dir" ]] \
+                || bootstrap_error "deployment directory does not exist: $active_dir"
+            ;;
+        "$repo_root"/*)
+            active_dir="$repo_root"
+            deploy_env=""
+            ;;
+        *)
+            bootstrap_error "resolved directory escapes repository root: $invocation_dir"
+            ;;
+    esac
+
+    export PM_SETUP_INVOKED_FROM="$invocation_dir"
+    export PORTMASON_PROJECT_ROOT="$repo_root"
+    export SCRIPT_DIR="$active_dir"
+    export PM_COMPOSE_CONTROL_FILE="$repo_root/docker-compose.yml"
+    export PM_COMPOSE_PROJECT_DIRECTORY="$active_dir"
+    export MGT_SCRIPT_DIR="$active_dir/mgt-scripts"
+    cd -- "$active_dir"
+}
+
+resolve_context "$PWD"
+
+if [[ "${1:-}" == "--bootstrap-context" ]]; then
+    printf 'PROJECT_ROOT=%s\n' "$PORTMASON_PROJECT_ROOT"
+    printf 'SCRIPT_DIR=%s\n' "$SCRIPT_DIR"
+    printf 'PM_COMPOSE_CONTROL_FILE=%s\n' "$PM_COMPOSE_CONTROL_FILE"
+    printf 'PM_COMPOSE_PROJECT_DIRECTORY=%s\n' "$PM_COMPOSE_PROJECT_DIRECTORY"
+    printf 'DEPLOY_ENV=%s\n' "${DEPLOY_ENV:-}"
+    printf 'PWD=%s\n' "$PWD"
+    exit 0
+fi
+
+pm_setup_parse_bootstrap_args() {
+    local arg
+    while (($#)); do
+        arg="$1"
+        shift
+        case "$arg" in
+            --update)
+                (($#)) || bootstrap_error "--update requires an archive path"
+                [[ -z "$PM_SETUP_UPDATE_ARCHIVE" ]] \
+                    || bootstrap_error "--update may be specified only once"
+                pm_setup_prepare_update "$1"
+                shift
+                ;;
+            --update=*)
+                [[ -z "$PM_SETUP_UPDATE_ARCHIVE" ]] \
+                    || bootstrap_error "--update may be specified only once"
+                [[ -n "${arg#--update=}" ]] \
+                    || bootstrap_error "--update requires an archive path"
+                pm_setup_prepare_update "${arg#--update=}"
+                ;;
+            *)
+                PM_SETUP_FORWARD_ARGS+=("$arg")
+                ;;
+        esac
+    done
+}
+
+pm_setup_parse_bootstrap_args "$@"
+set -- "${PM_SETUP_FORWARD_ARGS[@]}"
+
+if [[ -n "${PM_SETUP_UPDATE_ARCHIVE:-}" ]] \
+    && [[ "${PM_SETUP_UPDATE_REENTERED:-0}" != "1" ]]; then
+
+    export PM_SETUP_UPDATE_REENTERED=1
+
+    cd -- "${PM_SETUP_INVOKED_FROM}"
+    exec "${PORTMASON_SHARE}/pm-setup-telemetry" "$@"
+fi
+
+pm_error_summary_reset
+PM_SETUP_HANDLED_FAILURE=0
+PM_SETUP_TELEMETRY_RUN_FAILED=0
+PM_SETUP_DEPLOYMENT_BLOCKED=0
+PM_SETUP_ALLOCATED_BUILD=0
+PM_SETUP_BUILD_FILE=""
+PM_SETUP_PREVIOUS_BUILD_NUMBER=""
+PM_SETUP_ALLOCATED_BUILD_NUMBER=""
+PM_COMPOSE_LABELS_OVERRIDE_FILE=""
+declare -Ag PM_SETUP_INVALID_SOURCE_FILES=()
+
+pm_setup_cleanup_compose_labels() {
+    if [[ -n "${PM_COMPOSE_LABELS_OVERRIDE_FILE:-}" \
+        && -f "$PM_COMPOSE_LABELS_OVERRIDE_FILE" ]]; then
+        rm -f -- "$PM_COMPOSE_LABELS_OVERRIDE_FILE"
+    fi
+    PM_COMPOSE_LABELS_OVERRIDE_FILE=""
+}
+
+pm_setup_exit() {
+    local rc="$?"
+
+    trap - EXIT
+    set +e
+
+    pm_setup_cleanup_compose_labels
+    if declare -F cleanup_tail >/dev/null 2>&1; then
+        cleanup_tail
+    fi
+    if declare -F pm_error_summary_print >/dev/null 2>&1; then
+        pm_error_summary_print
+    fi
+
+    return "$rc"
+}
+
+trap pm_setup_exit EXIT
+
+pm_setup_write_update_receipt() {
+    local result="${1:?result required}"
+    local rc="${2:-0}"
+    local completed_at archive_name
+
+    [[ -n "${PM_SETUP_UPDATE_RECEIPT:-}" ]] || return 0
+    completed_at="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
+    archive_name="$(basename -- "${PM_SETUP_UPDATE_ARCHIVE}")"
+
+    printf '{"archive":"%s","sha256":"%s","startedAt":"%s","completedAt":"%s","result":"%s","exitCode":%s}\n' \
+        "$archive_name" "$PM_SETUP_UPDATE_SHA256" "$PM_SETUP_UPDATE_STARTED_AT" \
+        "$completed_at" "$result" "$rc" > "$PM_SETUP_UPDATE_RECEIPT"
+}
+
+pm_setup_report_error() {
+    local rc="${1:-$?}"
+    local command="${2:-${BASH_COMMAND:-<unknown>}}"
+    local source_file="${3:-${BASH_SOURCE[1]:-${BASH_SOURCE[0]:-pm-setup}}}"
+    local source_line="${4:-${BASH_LINENO[0]:-${LINENO:-0}}}"
+    local function_name="${5:-${FUNCNAME[1]:-main}}"
+
+    trap - ERR
+    PM_SETUP_TELEMETRY_RUN_FAILED=1
+
+    if [[ "${PM_SETUP_HANDLED_FAILURE:-0}" != 1 ]]; then
+        if declare -F log >/dev/null 2>&1; then
+            log ERROR "unhandled command failure" \
+                "rc=${rc}" \
+                "source=${source_file}" \
+                "line=${source_line}" \
+                "function=${function_name}" \
+                "command=${command}"
+        else
+            printf 'ERROR: pm-setup failure rc=%s source=%s line=%s function=%s command=%s\n' \
+                "$rc" "$source_file" "$source_line" "$function_name" "$command" >&2
+        fi
+    fi
+
+    if declare -F pm_setup_rollback_allocated_build >/dev/null 2>&1; then
+        pm_setup_rollback_allocated_build
+    fi
+    pm_setup_write_update_receipt "failed" "$rc"
+    exit "$rc"
+}
+
+set -E
+trap 'pm_setup_report_error "$?" "$BASH_COMMAND" "${BASH_SOURCE[0]:-pm-setup}" "${LINENO:-0}" "${FUNCNAME[0]:-main}"' ERR
+
+pm_record_failure() {
+    local message="${1:?message required}"
+    shift
+
+    PM_SETUP_TELEMETRY_RUN_FAILED=1
+    log ERROR "$message" "$@"
+}
+
+pm_log_completion() {
+    log INFO "workflow complete" \
+        "deploy_env=${DEPLOY_ENV:-prd}" \
+        "stack=${STACK:-<unset>}"
+	
+	if [[ ${TELEMETRY_DASHBOARD_ENABLED:-false} == true ]]; then
+		log INFO "telemetry is ready" "TELEMETRY_DASHBOARD_URL=${TELEMETRY_DASHBOARD_URL}" 
+	fi
+}
+
+main() {
+    export PROJECT_SERVICES=
+
+    local deploy_sync_active=0
+    local deploy_sync_force=0
+    local sync_owner_host=""
+    local -a sync_args=(--prepare)
+
+    case "${PM_DEPLOY_SYNC_FORCE:-}" in
+        1|true|TRUE|yes|YES|on|ON)
+            deploy_sync_force=1
+            ;;
+    esac
+
+    [[ ${REFRESH_FROM_ROOT:-0} == 1 || ${FORCE_DEPLOY_SYNC:-0} == 1 ]] && deploy_sync_force=1
+
+    if is_deploy_snapshot_dir; then
+        sync_owner_host="$(hostname 2>/dev/null || printf 'unknown')"
+        if [[ "$deploy_sync_force" -eq 1 ]]; then
+            sync_args+=(--force)
+            log INFO "explicit deploy refresh requested"
+        fi
+        PM_DEPLOY_SYNC_OWNER_PID="$$" \
+        PM_DEPLOY_SYNC_OWNER_HOST="$sync_owner_host" \
+            "${PORTMASON_SHARE}/pm-sync-telemetry-deploy-from-root" "${sync_args[@]}"
+        deploy_sync_active=1
+    elif [[ "$deploy_sync_force" -eq 1 ]]; then
+        die "--refresh-from-root is only valid from deploy/<env>"
+    fi
+
+    log INFO "PROJECT_ROOT=${PROJECT_ROOT:-<unset>}"
+    log INFO "SCRIPT_DIR=${SCRIPT_DIR:-<unset>}"
+	log INFO "DEPLOY_ENV=${DEPLOY_ENV:-prd}"
+    log INFO "ENV_FILE=${ENV_FILE:-<unset>}"
+    log INFO "SITE_DIR=${SITE_DIR:-<unset>}"
+#    log INFO "generator=${PORTMASON_SHARE}/pm-generate-config"
+    log INFO "TELEMETRY_STORE_PROVIDER_PLATFORM_CODE=${TELEMETRY_STORE_PROVIDER_PLATFORM_CODE:-<unset>}"
+    log INFO "TELEMETRY_DASHBOARD_PROVIDER=${TELEMETRY_DASHBOARD_PROVIDER:-<unset>}"
+    log INFO "TELEMETRY_DIGEST_PROVIDER=${TELEMETRY_DIGEST_PROVIDER:-<unset>}"
+    log INFO "TELEMETRY_UPTIME_PROVIDER=${TELEMETRY_UPTIME_PROVIDER:-<unset>}"
+    log INFO "TELEMETRY_SOURCE_CONTROL_PROVIDER=${TELEMETRY_SOURCE_CONTROL_PROVIDER:-<unset>}"
+
+    local file
+
+    if ! telemetry_is_true "${TELEMETRY_ENABLED:-false}"; then
+        log INFO "telemetry setup skipped" "reason=disabled"
+        return 0
+    fi
+
+    telemetry_resolve_configuration
+
+    pm_run_telemetry_dependency() {
+        local phase="${1:?phase required}"
+        local component="${2:?component required}"
+        local selector="${3:-}"
+
+        [[ -n "$selector" ]] || return 0
+        [[ "$selector" =~ ^[a-z0-9_][a-z0-9_-]*$ ]] \
+            || die "Unsupported telemetry dependency selector: $selector" 2
+        file="${PORTMASON_SHARE}/pm-${phase}-telemetry-${component}-${selector}"
+        [[ -r "$file" ]] || return 0
+        log INFO "sourcing telemetry dependency" \
+            "phase=$phase" "component=$component" "selector=$selector" "file=$file"
+        shift 3
+        . "$file" "$@"
+    }
+
+    pm_run_fixed_telemetry_dependency() {
+        local phase="${1:?phase required}"
+        local component="${2:?component required}"
+
+        file="${PORTMASON_SHARE}/pm-${phase}-telemetry-${component}"
+        [[ -r "$file" ]] || return 0
+        log INFO "sourcing telemetry dependency" \
+            "phase=$phase" "component=$component" "file=$file"
+        shift 2
+        . "$file" "$@"
+    }
+
+    if [[ -n "${TELEMETRY_STORE_PROVIDER_PLATFORM_CODE:-}" ]]; then
+
+		local telemetry_store_code="${TELEMETRY_STORE_PROVIDER_PLATFORM_CODE:-}"
+
+		env_init_set TELEMETRY_STORE_PROVIDER_CODE "${telemetry_store_code%%-*}"
+		env_init_set TELEMETRY_STORE_PLATFORM_CODE "${telemetry_store_code#*-}"
+		export TELEMETRY_STORE_PROVIDER_CODE TELEMETRY_STORE_PLATFORM_CODE
+
+        pm_run_telemetry_dependency provision store "$TELEMETRY_STORE_PLATFORM_CODE" "$@"
+        [[ "$TELEMETRY_STORE_PROVIDER_CODE" == "$TELEMETRY_STORE_PLATFORM_CODE" ]] \
+            || pm_run_telemetry_dependency provision store "$TELEMETRY_STORE_PROVIDER_CODE" "$@"
+        pm_run_telemetry_dependency setup store "$TELEMETRY_STORE_PLATFORM_CODE" "$@"
+        [[ "$TELEMETRY_STORE_PROVIDER_CODE" == "$TELEMETRY_STORE_PLATFORM_CODE" ]] \
+            || pm_run_telemetry_dependency setup store "$TELEMETRY_STORE_PROVIDER_CODE" "$@"
+        pm_run_telemetry_dependency deploy store "$TELEMETRY_STORE_PLATFORM_CODE" "$@"
+        [[ "$TELEMETRY_STORE_PROVIDER_CODE" == "$TELEMETRY_STORE_PLATFORM_CODE" ]] \
+            || pm_run_telemetry_dependency deploy store "$TELEMETRY_STORE_PROVIDER_CODE" "$@"
+    fi
+
+    local phase
+    for phase in provision setup deploy; do
+        if [[ -n $TELEMETRY_OTLP_PLATFORM:- ]]; then
+            pm_run_telemetry_dependency "$phase" collector "${TELEMETRY_OTLP_PLATFORM:-}" "$@"
+        fi
+        if telemetry_is_true "${TELEMETRY_DASHBOARD_ENABLED:-false}"; then
+            pm_run_telemetry_dependency "$phase" dashboard "${TELEMETRY_DASHBOARD_PROVIDER:-}" "$@"
+        fi
+        if telemetry_is_true "${TELEMETRY_NOTIFICATION_ENABLED:-false}"; then
+            pm_run_fixed_telemetry_dependency "$phase" notification "$@"
+        fi
+        if telemetry_is_true "${TELEMETRY_DIGEST_ENABLED:-false}"; then
+            pm_run_telemetry_dependency "$phase" digest "${TELEMETRY_DIGEST_PROVIDER:-}" "$@"
+        fi
+        if telemetry_is_true "${TELEMETRY_UPTIME_ENABLED:-false}"; then
+            pm_run_telemetry_dependency "$phase" uptime "${TELEMETRY_UPTIME_PROVIDER:-}" "$@"
+        fi
+        if telemetry_is_true "${TELEMETRY_SOURCE_CONTROL_ENABLED:-false}"; then
+            pm_run_telemetry_dependency "$phase" source-control "${TELEMETRY_SOURCE_CONTROL_PROVIDER:-}" "$@"
+        fi
+    done
+
+
+    if [[ "$deploy_sync_active" -eq 1 ]]; then
+        PM_DEPLOY_SYNC_OWNER_PID="$$" \
+        PM_DEPLOY_SYNC_OWNER_HOST="$sync_owner_host" \
+            "${PORTMASON_SHARE}/pm-sync-telemetry-deploy-from-root" --finalize
+    fi
+
+    if (( PM_SETUP_TELEMETRY_RUN_FAILED == 0 )); then
+        pm_log_completion
+    else
+        log WARN \
+            "workflow completed diagnostic collection with errors" \
+            "action=review-error-summary"
+
+    fi
+
+    return 0
+}
+
+pm_setup_arg \
+    REFRESH_FROM_ROOT \
+    "--refresh-from-root" \
+    export
+
+pm_setup_arg \
+    FORCE_DEPLOY_SYNC \
+    "--force-deploy-sync" \
+    export
+
+pm_commit_args "$@"
+
+main "$@"
+pm_error_summary_print
+
+if (( PM_SETUP_TELEMETRY_RUN_FAILED != 0 )); then
+    exit 2
+fi

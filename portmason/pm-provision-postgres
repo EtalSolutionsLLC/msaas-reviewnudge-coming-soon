@@ -4,7 +4,6 @@ set -euo pipefail
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
     . "${PORTMASON_SHARE}/pm-helpers" "$@"
     # shellcheck disable=SC1090
-    # . "${PORTMASON_SHARE}/pm-helpers-db"
 
 pm_postgres_psql_admin() {
     PM_DB_RT_USER="${DB_ADMIN_USER:?DB_ADMIN_USER required}" \
@@ -88,6 +87,43 @@ SQL
         "database=$DB_NAME" "role=$DB_USER"
 }
 
+pm_postgres_provision_contract() {
+    local label="${1:?database contract label required}"
+    local database="${2:?database name required}"
+    local user="${3:?database user required}"
+    local password="${4:?database password required}"
+    local connection="${5:-}"
+    local extensions="${6:-}"
+
+    log INFO "starting additional PostgreSQL contract provisioning" \
+        "contract=$label" "database=$database" "user=$user"
+
+    DB_USER="$user" \
+    DB_PASSWORD="$password" \
+    PM_DB_RT_CONNECTION="$connection" \
+        pm_postgres_ensure_role
+
+    DB_NAME="$database" \
+    DB_USER="$user" \
+    PM_DB_RT_CONNECTION="$connection" \
+        pm_postgres_ensure_database
+
+    DB_NAME="$database" \
+    DB_USER="$user" \
+    DB_PASSWORD="$password" \
+    DB_EXTENSIONS="$extensions" \
+    PM_DB_RT_CONNECTION="$connection" \
+        pm_postgres_ensure_extensions
+
+    DB_NAME="$database" \
+    DB_USER="$user" \
+    PM_DB_RT_CONNECTION="$connection" \
+        pm_postgres_apply_base_grants
+
+    log INFO "additional PostgreSQL contract ready" \
+        "contract=$label" "database=$database" "user=$user"
+}
+
 pm_provision_db_provider() {
     # pm-setup loads .env.generated before lifecycle execution. The standalone
     # command follows the same contract when invoked outside pm-setup.
@@ -118,6 +154,4 @@ main() {
     pm_provision_db_provider "$@"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+main "$@"

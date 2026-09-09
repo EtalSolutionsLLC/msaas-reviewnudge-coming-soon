@@ -1,11 +1,18 @@
 {
-  "PROJECT_ID": "reviewnudge-coming--1777712786",
-  "STACK": "reviewnudge-coming-soon-prd",
-  "DEPLOYMENT_ID": "reviewnudge-coming--1777712786",
+  "APP_HOST": "reviewnudge-coming-soon-prd.etal.solutions",
   "APP_SLUG": "reviewnudge-coming-soon",
+  "DATA_CLASS": "confidential",
+  "DATA_LIFECYCLE": "persistent",
+  "DEPLOYMENT_ID": "reviewnudge-coming--1777712786",
   "DEPLOY_ENV": "prd",
-  "APP_HOST": "reviewnudge-coming-soon.etal.solutions",
-  "APP_URL": "https://reviewnudge-coming-soon.etal.solutions",
+  "LIFECYCLE": "long-lived",
+  "LOCAL_DOMAIN": "etal.solutions",
+  "MANAGED_BY": "compose",
+  "OWNER_ALIAS": "etalsolutions",
+  "PM_SERVE_EXCLUDE_ADDTL_DIRS": "portmason",
+  "PROJECT_ID": "reviewnudge-coming--1777712786",
+  "RUNTIME_ADAPTER_CODE": "static-github",
+  "STACK": "reviewnudge-coming-soon-prd",
   "URI_SCHEME": "https",
-  "LOG_FORMAT": "text"
+  "WP_SITE_URL": "https://reviewnudge-coming-soon-prd.etal.solutions"
 }

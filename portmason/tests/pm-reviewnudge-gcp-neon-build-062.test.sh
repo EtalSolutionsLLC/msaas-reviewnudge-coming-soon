@@ -185,16 +185,18 @@ pm_deploy_db_provider
 pm_deploy_runtime_platform
 
 # The app runtime is GCP; the database platform remains Neon.
+[[ "$ALTERNATE_APP_URL" == "https://reviewnudge.run.app" ]]
 grep -Fq 'POST /projects?org_id=org-062' "$NEON_TRACE"
 grep -Fq -- 'run deploy reviewnudge-prd-web' "$GCLOUD_TRACE"
 grep -Fq -- '--env-vars-file' "$GCLOUD_TRACE"
 grep -Fq -- '--port 3080' "$GCLOUD_TRACE"
 grep -Fq 'BLOCKED_SHORTENER_DOMAINS: "bit.ly,tinyurl.com,t.co"' "$GCLOUD_TRACE"
-grep -Fq -- '--set-secrets DB_PASSWORD=projects/reviewnudge-prd-062/secrets/reviewnudge-prd-db-password:latest' "$GCLOUD_TRACE"
+grep -Fq -- '--set-secrets DB_PASSWORD=reviewnudge-prd-db-password:latest' "$GCLOUD_TRACE"
 ! grep -Fq -- '--add-cloudsql-instances' "$GCLOUD_TRACE"
 ! grep -Fq -- 'NEON_API_KEY=' "$GCLOUD_TRACE"
 ! grep -Fq 'application-secret-062' "$TEST_LOG" "$GCLOUD_TRACE" "$DOCKER_TRACE"
 ! grep -Fq 'neon-control-secret-062' "$TEST_LOG" "$GCLOUD_TRACE" "$DOCKER_TRACE"
 grep -Fq 'runtime platform deployment complete' "$TEST_LOG"
+grep -Fq 'alternate_app_url=https://reviewnudge.run.app' "$TEST_LOG"
 
 printf 'Portmason ReviewNudge GCP runtime with Neon PostgreSQL contract test passed.\n'

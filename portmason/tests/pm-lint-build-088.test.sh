@@ -186,12 +186,22 @@ RUNTIME_ADAPTER_CODE=node-gcp
 RUNTIME_CODE=node
 ADAPTER_CODE=gcp
 DB_PROVIDER_PLATFORM_CODE=postgres-neon
+DB_PROVIDER=postgres
+DB_PLATFORM=neon
 DB_PROVIDER_CODE=postgres
 DB_PLATFORM_CODE=neon
-DATABASE_URL=postgres://example
+DB_URL=postgres://example
 FILE
 assert_failure_contains PM006 run_lint "$repo" --rule PM006 project.env
 assert_failure_contains PM017 run_lint "$repo" --rule PM017 project.env
+
+cat > "$repo/project.env" <<'FILE'
+DB_PROVIDER_PLATFORM_CODE=postgres-neon
+DB_PROVIDER=postgres
+DB_PLATFORM=neon
+FILE
+assert_failure_contains DB_PROVIDER run_lint "$repo" --rule PM006 project.env
+assert_failure_contains DB_PLATFORM run_lint "$repo" --rule PM006 project.env
 pass 'PM006 and PM017 source-of-truth rules'
 
 
@@ -307,10 +317,10 @@ pass 'PM014 bridge-boundary guidance'
 
 # PM011 committed secret detection.
 repo="$(new_repo secrets)"
-printf 'PM_EDGE_TUNNEL_TOKEN=fixture-%s-token-value\nDATABASE_URL=postgres://user:pass@db.internal/db\n' "$RANDOM" > "$repo/.env"
+printf 'PM_EDGE_TUNNEL_TOKEN=fixture-%s-token-value\nDB_URL=postgres://user:pass@db.internal/db\n' "$RANDOM" > "$repo/.env"
 git -C "$repo" add .env
 assert_failure_contains PM011 run_lint "$repo" --rule PM011 .env
-assert_failure_contains DATABASE_URL run_lint "$repo" --rule PM011 .env
+assert_failure_contains DB_URL run_lint "$repo" --rule PM011 .env
 pass 'PM011 secret detection'
 
 # PM015 Portmason-owned prefix and provider-native source detection.

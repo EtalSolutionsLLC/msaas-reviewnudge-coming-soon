@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+: "${TELEMETRY_DASHBOARD_URL:?TELEMETRY_DASHBOARD_URL required}"
+dashboard_dir="${SCRIPT_DIR}/telemetry/grafana/dashboards"
+[[ -d "$dashboard_dir" ]] || die "Telemetry dashboard directory is not readable: $dashboard_dir" 2
+dashboard_count=0
+while IFS= read -r dashboard_file; do
+    dashboard_uid="$(jq -er '.uid | select(type == "string" and length > 0)' "$dashboard_file")" \
+        || die "Telemetry dashboard UID is missing: $dashboard_file" 2
+    jq -e '.title | type == "string" and length > 0' "$dashboard_file" >/dev/null \
+        || die "Telemetry dashboard title is missing: $dashboard_file" 2
+    dashboard_count=$((dashboard_count + 1))
+    log INFO "Grafana dashboard definition ready" "uid=$dashboard_uid" "file=$dashboard_file"
+done < <(find "$dashboard_dir" -maxdepth 1 -type f -name '*.json' -print | LC_ALL=C sort)
+(( dashboard_count > 0 )) || die "No Grafana dashboard definitions found in $dashboard_dir" 2
+
+if [[ "${TELEMETRY_STORE_PLATFORM_CODE:-}" != local ]]; then
+    : "${TELEMETRY_DASHBOARD_API_TOKEN:?TELEMETRY_DASHBOARD_API_TOKEN required for hosted Grafana}"
+fi
+log INFO "Grafana dashboard definitions validated" "count=$dashboard_count"
+
+pm_telemetry_verify_dashboard_realization() {
+    local service="${1:?dashboard service required}"
+    local dashboard_health="" attempt
+
+    for attempt in $(seq 1 30); do
+        dashboard_health="$(pm_telemetry_local_compose exec -T "$service" \
+            wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null || true)"
+        grep -q '"database"[[:space:]]*:[[:space:]]*"ok"' <<<"$dashboard_health" && return 0
+        sleep 2
+    done
+    die "Telemetry dashboard did not become ready within 60 seconds" 2
+}

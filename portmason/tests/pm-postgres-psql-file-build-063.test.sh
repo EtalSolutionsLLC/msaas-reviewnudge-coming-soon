@@ -80,6 +80,7 @@ pm_provision_db_provider
 
 assert_contains "$DB_RT_SQL" "CREATE DATABASE %I OWNER %I"
 assert_contains "$DB_RT_SQL" "ALTER DATABASE %I OWNER TO %I"
+assert_contains "$ROOT/pm-provision-db-postgres" "ALTER DATABASE %I OWNER TO %I"
 assert_contains "$DB_RT_SQL" "CREATE EXTENSION IF NOT EXISTS %I"
 assert_contains "$DB_RT_SQL" "GRANT CONNECT, TEMPORARY"
 assert_contains "$DB_RT_SQL" "\\gexec"

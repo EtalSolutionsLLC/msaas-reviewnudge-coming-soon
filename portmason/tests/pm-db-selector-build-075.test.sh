@@ -11,9 +11,11 @@ export -f log die env_init_set
 # shellcheck source=/dev/null
 . "$source_dir/pm-helpers-db"
 
-unset DB_PROVIDER_CODE DB_PLATFORM_CODE DATABASE_URL DB_HOST DB_NAME DB_USER
+unset DB_PROVIDER DB_PLATFORM DB_PROVIDER_CODE DB_PLATFORM_CODE DB_URL DB_HOST DB_NAME DB_USER
 DB_PROVIDER_PLATFORM_CODE=postgres-neon
 pm_db_refresh_selectors
+[[ "$DB_PROVIDER" == postgres ]]
+[[ "$DB_PLATFORM" == neon ]]
 [[ "$DB_PROVIDER_CODE" == postgres ]]
 [[ "$DB_PLATFORM_CODE" == neon ]]
 

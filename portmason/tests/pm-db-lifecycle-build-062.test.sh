@@ -101,14 +101,14 @@ export STACK=reviewnudge-prd DEPLOYMENT_ID=reviewnudge-prd-123 DEPLOY_ENV=prd
 export PROJECT_SERVICES='[{"service":"web","role":"web","image":"image","has_build":true,"command":[],"entrypoint":[],"depends_on":["db"]}]'
 export DB_PASSWORD='super-secret-value-062'
 export DB_USER='reviewnudge_app'
-export DATABASE_URL='postgresql://reviewnudge_app:super-secret-value-062@localhost/reviewnudge'
+export DB_URL='postgresql://reviewnudge_app:super-secret-value-062@localhost/reviewnudge'
 export PM_ADDITIONAL_SECRET_KEYS=
 export SECRET_PATHS=
 export ENV_FILE="$temp_dir/project/.env"
 cat > "${ENV_FILE}.generated" <<ENV
 DB_PASSWORD=$DB_PASSWORD
 DB_USER=$DB_USER
-DATABASE_URL=$DATABASE_URL
+DB_URL=$DB_URL
 ENV
 
 # Minimal functions required by the GCP helper come from pm-helpers-db.

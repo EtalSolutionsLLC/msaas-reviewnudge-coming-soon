@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${__PM_HELPERS_AZURE_LOADED:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+__PM_HELPERS_AZURE_LOADED=1
+
+pm_adapter_requires_compose() {
+    return 0
+}
+
+declare -ga PM_AZURE_CLI_CMD=()
+declare -g PM_AZURE_CLI_CMD_READY=0
+declare -g PM_AZURE_CLI_USING_WINDOWS=0
+
+pm_azure_bool_enabled() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pm_azure_windows_cli_path() {
+    local out_var="${1:?output variable required}"
+    local candidate
+    for candidate in \
+        "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin/az.cmd" \
+        "/mnt/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/wbin/az.cmd"
+    do
+        if [[ -f "$candidate" ]]; then
+            printf -v "$out_var" '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+pm_azure_set_windows_cli_cmd() {
+    local path="${1:?Windows Azure CLI path required}"
+    local windows_path="$path"
+    if command -v wslpath >/dev/null 2>&1; then
+        windows_path="$(wslpath -w "$path")"
+    fi
+    have cmd.exe || die "Windows Azure CLI requires cmd.exe to be available from WSL" 2
+    PM_AZURE_CLI_CMD=(cmd.exe /C "$windows_path")
+    PM_AZURE_CLI_USING_WINDOWS=1
+    export PM_AZURE_CLI_USING_WINDOWS
+}
+
+pm_azure_cli_init() {
+    (( PM_AZURE_CLI_CMD_READY == 1 )) && return 0
+
+    local windows_cli=""
+    if [[ -n "${AZURE_CLI_PATH:-}" ]]; then
+        [[ -x "$AZURE_CLI_PATH" || -f "$AZURE_CLI_PATH" ]] \
+            || die "Configured AZURE_CLI_PATH is not available: $AZURE_CLI_PATH" 2
+        PM_AZURE_CLI_CMD=("$AZURE_CLI_PATH")
+    elif pm_azure_bool_enabled "${PM_AZURE_CLI_USE_WINDOWS:-${AZURE_CLI_USE_WINDOWS:-}}"; then
+        pm_azure_windows_cli_path windows_cli \
+            || die "Windows Azure CLI requested, but az.cmd was not found" 2
+        pm_azure_set_windows_cli_cmd "$windows_cli"
+    elif have az; then
+        PM_AZURE_CLI_CMD=(az)
+        PM_AZURE_CLI_USING_WINDOWS=0
+    elif pm_azure_windows_cli_path windows_cli; then
+        pm_azure_set_windows_cli_cmd "$windows_cli"
+    else
+        die "Missing required command: az" 2
+    fi
+
+    PM_AZURE_CLI_CMD_READY=1
+    export PM_AZURE_CLI_CMD_READY
+}
+
+pm_azure_cli() {
+    pm_azure_cli_init
+    if (( PM_AZURE_CLI_USING_WINDOWS == 1 )); then
+        (
+            cd "${PM_AZURE_WINDOWS_WORKDIR:-/mnt/c}" \
+                || die "Windows Azure CLI work directory is unavailable: ${PM_AZURE_WINDOWS_WORKDIR:-/mnt/c}" 2
+            "${PM_AZURE_CLI_CMD[@]}" "$@"
+        )
+    else
+        "${PM_AZURE_CLI_CMD[@]}" "$@"
+    fi
+}
+
+pm_azure_cli_require_account() {
+    local output rc=0 windows_cli=""
+    pm_azure_cli_init
+    output="$(pm_azure_cli account show --only-show-errors 2>&1)" || rc=$?
+    if (( rc == 0 )); then
+        return 0
+    fi
+
+    if (( PM_AZURE_CLI_USING_WINDOWS == 0 )) \
+        && pm_azure_windows_cli_path windows_cli; then
+        log WARN "native Azure CLI is unavailable or blocked; trying Windows Azure CLI" \
+            "windows_cli=$windows_cli"
+        pm_azure_set_windows_cli_cmd "$windows_cli"
+        output="$(pm_azure_cli account show --only-show-errors 2>&1)" || rc=$?
+        if (( rc == 0 )); then
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "$output" >&2
+    die "Azure CLI is not logged in or has no active subscription" 2
+}
+
+# pm_azure_ensure_config_manager() {
+#         # shellcheck disable=SC1090
+#     fi
+#     if [[ "${PM_CONFIG_MANAGER_PREPARED:-0}" != 1 ]]; then
+#     fi
+# }
+
+pm_azure_slug() {
+    local out_var="${1:?output variable required}"
+    local value="${2-}"
+    value="${value,,}"
+    value="${value//_/-}"
+    value="$(printf '%s' "$value" | sed 's/[^a-z0-9-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
+    printf -v "$out_var" '%s' "$value"
+}
+
+pm_azure_alnum() {
+    local out_var="${1:?output variable required}"
+    local value="${2-}"
+    value="${value,,}"
+    value="$(printf '%s' "$value" | sed 's/[^a-z0-9]//g')"
+    printf -v "$out_var" '%s' "$value"
+}
+
+pm_azure_hash() {
+    local out_var="${1:?output variable required}"
+    local value="${2-}"
+    local digest
+    digest="$(printf '%s' "$value" | sha256sum | awk '{print substr($1,1,10)}')"
+    printf -v "$out_var" '%s' "$digest"
+}
+
+pm_azure_defaults() {
+    local base slug alnum hash
+    base="${STACK:-${APP_SLUG:-portmason}}"
+    pm_azure_slug slug "$base"
+    [[ -n "$slug" ]] || slug="portmason"
+    [[ "$slug" =~ ^[a-z] ]] || slug="p-${slug}"
+    pm_azure_alnum alnum "$base"
+    [[ -n "$alnum" ]] || alnum="portmason"
+    [[ "$alnum" =~ ^[a-z] ]] || alnum="p${alnum}"
+    pm_azure_hash hash "${DEPLOYMENT_ID:-$base}"
+
+    env_init_set AZURE_LOCATION "${AZURE_LOCATION:-${PLATFORM_REGION:-${REGION:-westus}}}"
+    env_init_set PLATFORM_REGION "${PLATFORM_REGION:-$AZURE_LOCATION}"
+    env_init_set AZURE_RESOURCE_GROUP "${AZURE_RESOURCE_GROUP:-${DEPLOYMENT_ID:-$slug}}"
+    env_init_set AZURE_CONTAINER_ENV "${AZURE_CONTAINER_ENV:-${slug}-aca}"
+    env_init_set AZURE_LOG_ANALYTICS_NAME "${AZURE_LOG_ANALYTICS_NAME:-${slug}-logs}"
+    env_init_set AZURE_ACR_NAME "${AZURE_ACR_NAME:-${alnum}${hash}}"
+    AZURE_ACR_NAME="${AZURE_ACR_NAME:0:50}"
+    if ((${#AZURE_ACR_NAME} < 5)); then
+        AZURE_ACR_NAME="${AZURE_ACR_NAME}acr01"
+        AZURE_ACR_NAME="${AZURE_ACR_NAME:0:50}"
+    fi
+    export AZURE_ACR_NAME
+
+    env_init_set AZURE_KEYVAULT_NAME "${AZURE_KEYVAULT_NAME:-${slug}-kv}"
+    AZURE_KEYVAULT_NAME="${AZURE_KEYVAULT_NAME:0:24}"
+    AZURE_KEYVAULT_NAME="${AZURE_KEYVAULT_NAME%-}"
+    [[ ${#AZURE_KEYVAULT_NAME} -ge 3 ]] || AZURE_KEYVAULT_NAME="${AZURE_KEYVAULT_NAME}kv1"
+    export AZURE_KEYVAULT_NAME
+
+    env_init_set AZURE_IDENTITY_NAME "${AZURE_IDENTITY_NAME:-${slug}-aca-id}"
+    env_init_set AZURE_SERVICE_BUS_NAMESPACE "${AZURE_SERVICE_BUS_NAMESPACE:-${slug}-sb-${hash:0:6}}"
+    env_init_set AZURE_ACR_SKU "${AZURE_ACR_SKU:-Basic}"
+    env_init_set AZURE_SERVICE_BUS_SKU "${AZURE_SERVICE_BUS_SKU:-Standard}"
+}
+
+pm_azure_bicep_root() {
+    local out_var="${1:?output variable required}"
+    local root="${PORTMASON_SHARE}/share/azure"
+    [[ -d "$root" ]] || die "Azure Bicep assets are unavailable: $root" 2
+    printf -v "$out_var" '%s' "$root"
+}
+
+pm_azure_current_principal() {
+    local id_out="${1:?principal id output variable required}"
+    local type_out="${2:?principal type output variable required}"
+    local principal_id="${AZURE_DEPLOYMENT_PRINCIPAL_ID:-}"
+    local principal_type="${AZURE_DEPLOYMENT_PRINCIPAL_TYPE:-}"
+    local account_type account_name
+
+    if [[ -n "$principal_id" && -n "$principal_type" ]]; then
+        printf -v "$id_out" '%s' "$principal_id"
+        printf -v "$type_out" '%s' "$principal_type"
+        return 0
+    fi
+
+    account_type="$(pm_azure_cli account show --query user.type -o tsv --only-show-errors)"
+    account_name="$(pm_azure_cli account show --query user.name -o tsv --only-show-errors)"
+    case "$account_type" in
+        user)
+            principal_id="$(pm_azure_cli ad signed-in-user show --query id -o tsv --only-show-errors)"
+            principal_type="User"
+            ;;
+        servicePrincipal)
+            principal_id="$(pm_azure_cli ad sp show --id "$account_name" --query id -o tsv --only-show-errors)"
+            principal_type="ServicePrincipal"
+            ;;
+        *)
+            die "Unsupported Azure deployment principal type: ${account_type:-<unset>}" 2
+            ;;
+    esac
+    [[ -n "$principal_id" ]] || die "Unable to resolve Azure deployment principal object ID" 2
+    env_init_set AZURE_DEPLOYMENT_PRINCIPAL_ID "$principal_id"
+    env_init_set AZURE_DEPLOYMENT_PRINCIPAL_TYPE "$principal_type"
+    printf -v "$id_out" '%s' "$principal_id"
+    printf -v "$type_out" '%s' "$principal_type"
+}
+
+pm_azure_deployment_name() {
+    local out_var="${1:?output variable required}"
+    local phase="${2:?deployment phase required}"
+    local value
+    pm_azure_slug value "${STACK:-portmason}-${phase}-${BUILD_NUMBER:-0}"
+    printf -v "$out_var" '%s' "${value:0:64}"
+}
+
+resource_name() {
+    local out_var="${1:?output variable required}"
+    local service="${2:?service required}"
+    local value
+    pm_azure_slug value "${STACK:?STACK required}-${service}"
+    [[ "$value" =~ ^[a-z] ]] || value="p-${value}"
+    printf -v "$out_var" '%s' "${value:0:32}"
+}
+
+compose_image_for_service() {
+    local out_var="${1:?output variable required}"
+    local service="${2:?service required}"
+    local configured_image="${3:-}"
+    local image="$configured_image"
+    [[ -n "$image" ]] || image="${STACK}-${service}:latest"
+    printf -v "$out_var" '%s' "$image"
+}
+
+pm_azure_kv_secret_name_for_key() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local base value
+    pm_azure_slug base "${STACK:-portmason}-${key}"
+    [[ -n "$base" ]] || base="portmason-secret"
+    value="${base:0:127}"
+    value="${value%-}"
+    printf -v "$out_var" '%s' "$value"
+}
+
+pm_azure_container_secret_name_for_key() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local hash base value
+    pm_azure_hash hash "$key"
+    pm_azure_slug base "$key"
+    base="${base:0:8}"
+    value="s-${hash:0:10}"
+    [[ -n "$base" ]] && value="${value}-${base}"
+    printf -v "$out_var" '%s' "${value:0:20}"
+}
+
+pm_azure_secret_override_uri() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local line ref path secret=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" && "$line" == *"|"* ]] || continue
+        ref="${line%%|*}"
+        path="${line#*|}"
+        [[ "$ref" == "$key" ]] || continue
+        path="${path#azure:}"
+        path="${path#keyvault:}"
+        if [[ "$path" == https://* ]]; then
+            printf -v "$out_var" '%s' "$path"
+            return 0
+        fi
+        secret="${path##*/}"
+        [[ -n "$secret" ]] || return 1
+        printf -v "$out_var" 'https://%s.vault.azure.net/secrets/%s' \
+            "${AZURE_KEYVAULT_NAME:?AZURE_KEYVAULT_NAME required}" "$secret"
+        return 0
+    done <<<"${SECRET_PATHS:-}"
+    return 1
+}
+
+pm_azure_secret_uri_for_key() {
+    local out_var="${1:?output variable required}"
+    local key="${2:?key required}"
+    local secret
+    if pm_azure_secret_override_uri "$out_var" "$key"; then
+        return 0
+    fi
+    pm_azure_kv_secret_name_for_key secret "$key"
+    printf -v "$out_var" 'https://%s.vault.azure.net/secrets/%s' \
+        "${AZURE_KEYVAULT_NAME:?AZURE_KEYVAULT_NAME required}" "$secret"
+}
+
+
+pm_azure_sync_secret_value() {
+    local key="${1:?key required}"
+    local value="${2-}"
+    local secret attempt rc=0 error_file error_text
+    local max_attempts="${AZURE_RBAC_MAX_ATTEMPTS:-12}"
+    local retry_seconds="${AZURE_RBAC_RETRY_SECONDS:-10}"
+
+    if [[ -z "$value" ]]; then
+        log INFO \
+            "pm-azure-secrets: using existing externally managed secret" \
+            "key=$key"
+        return 0
+    fi
+
+    pm_azure_kv_secret_name_for_key secret "$key"
+    error_file="$(mktemp)"
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
+        : > "$error_file"
+        rc=0
+        pm_azure_cli keyvault secret set \
+            --vault-name "$AZURE_KEYVAULT_NAME" \
+            --name "$secret" \
+            --value "$value" \
+            --only-show-errors >/dev/null 2>"$error_file" || rc=$?
+        if (( rc == 0 )); then
+            rm -f -- "$error_file"
+            log INFO "pm-azure-secrets: Key Vault secret synchronized" \
+                "key=$key" "vault=$AZURE_KEYVAULT_NAME" "secret=$secret"
+            return 0
+        fi
+        error_text="$(tr '\n' ' ' < "$error_file")"
+        if [[ "$error_text" != *ForbiddenByRbac* || "$attempt" -ge "$max_attempts" ]]; then
+            rm -f -- "$error_file"
+            die "Key Vault secret synchronization failed key=$key vault=$AZURE_KEYVAULT_NAME secret=$secret attempts=$attempt azure_error=$error_text" "$rc"
+        fi
+        log WARN "waiting for Key Vault RBAC propagation" \
+            "key=$key" "attempt=$attempt" "max_attempts=$max_attempts" \
+            "retry_seconds=$retry_seconds"
+        sleep "$retry_seconds"
+    done
+    rm -f -- "$error_file"
+    return "$rc"
+}
+
+# pm_azure_sync_secret_value() {
+#     local key="${1:?key required}"
+#     local value="${2-}"
+#     local secret
+#     if [[ -z "$value" ]]; then
+#         log INFO "pm-azure-secrets: using existing externally managed secret" "key=$key"
+#         return 0
+#     fi
+#     pm_azure_kv_secret_name_for_key secret "$key"
+#     log INFO "pm-azure-secrets: setting Key Vault secret" \
+#         "key=$key" "vault=$AZURE_KEYVAULT_NAME" "secret=$secret"
+#     pm_azure_cli keyvault secret set \
+#         --vault-name "$AZURE_KEYVAULT_NAME" \
+#         --name "$secret" \
+#         --value "$value" \
+#         --only-show-errors >/dev/null
+# }
+
+sync_runtime_secrets() {
+    pm_azure_defaults
+#    pm_azure_ensure_config_manager
+
+    local service role image has_build source target value seen_key
+    declare -A seen=()
+    while IFS=$'\t' read -r service role image has_build; do
+        [[ -n "$service" ]] || continue
+        while IFS= read -r -d '' source; do
+            IFS= read -r -d '' target || target="$source"
+            IFS= read -r -d '' value || value=""
+            seen_key="$source"
+            [[ -z "${seen[$seen_key]+x}" ]] || continue
+            seen["$seen_key"]=1
+            pm_azure_sync_secret_value "$source" "$value"
+        done < <(pm_config_secret_binding_nul_for_service "$service" "$role")
+    done < <(pm_compose_deployable_services_tsv)
+}
+
+pm_azure_service_env_json() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local key value source target container_secret queue_name queue_delivery
+    local tmp
+    tmp="$(mktemp)"
+#    pm_azure_ensure_config_manager
+
+    while IFS= read -r -d '' key; do
+        IFS= read -r -d '' value || value=""
+        jq -cn --arg name "$key" --arg value "$value" '{name:$name,value:$value}' >> "$tmp"
+    done < <(pm_config_var_kv_nul_for_service "$service" "$role")
+
+    while IFS= read -r -d '' source; do
+        IFS= read -r -d '' target || target="$source"
+        IFS= read -r -d '' value || value=""
+        pm_azure_container_secret_name_for_key container_secret "$target"
+        jq -cn --arg name "$target" --arg secretRef "$container_secret" \
+            '{name:$name,secretRef:$secretRef}' >> "$tmp"
+    done < <(pm_config_secret_binding_nul_for_service "$service" "$role")
+
+    queue_name="$(jq -r --arg service "$service" \
+        '.[] | select(.service == $service) | .queue_consume // .queue_publish // empty' \
+        <<<"${PROJECT_SERVICES:-[]}")"
+    if [[ -n "$queue_name" ]]; then
+        jq -cn --arg name PM_QUEUE_PROVIDER --arg value service-bus '{name:$name,value:$value}' >> "$tmp"
+        jq -cn --arg name PM_QUEUE_NAMESPACE --arg value "${AZURE_SERVICE_BUS_NAMESPACE:-}" '{name:$name,value:$value}' >> "$tmp"
+        jq -cn --arg name PM_QUEUE_NAME --arg value "$queue_name" '{name:$name,value:$value}' >> "$tmp"
+        jq -cn --arg name PM_IDENTITY_CLIENT_ID --arg value "${AZURE_IDENTITY_CLIENT_ID:-}" '{name:$name,value:$value}' >> "$tmp"
+        queue_delivery="$(jq -r --arg queue "$queue_name" \
+            '.[] | select(.service == $queue) | .queue_delivery // empty' \
+            <<<"${PROJECT_SERVICES:-[]}")"
+        if [[ ",$queue_delivery," == *,scheduled,* ]]; then
+            jq -cn --arg name PM_SCHEDULED_WORK_PROVIDER --arg value service-bus '{name:$name,value:$value}' >> "$tmp"
+            jq -cn --arg name PM_SCHEDULED_WORK_NAMESPACE --arg value "${AZURE_SERVICE_BUS_NAMESPACE:-}" '{name:$name,value:$value}' >> "$tmp"
+            jq -cn --arg name PM_SCHEDULED_WORK_QUEUE --arg value "$queue_name" '{name:$name,value:$value}' >> "$tmp"
+        fi
+    fi
+    jq -s '.' "$tmp"
+    rm -f -- "$tmp"
+}
+
+pm_azure_service_secrets_json() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local source target value container_secret uri
+    local tmp
+    tmp="$(mktemp)"
+#    pm_azure_ensure_config_manager
+
+    while IFS= read -r -d '' source; do
+        IFS= read -r -d '' target || target="$source"
+        IFS= read -r -d '' value || value=""
+        pm_azure_container_secret_name_for_key container_secret "$target"
+        pm_azure_secret_uri_for_key uri "$source"
+        jq -cn --arg name "$container_secret" --arg keyVaultUrl "$uri" \
+            '{name:$name,keyVaultUrl:$keyVaultUrl}' >> "$tmp"
+    done < <(pm_config_secret_binding_nul_for_service "$service" "$role")
+    jq -s '.' "$tmp"
+    rm -f -- "$tmp"
+}
+
+pm_azure_service_command_json() {
+    local service="${1:?service required}"
+    jq -c --arg service "$service" '
+        .[] | select(.service == $service) |
+        if (.run_command // "") != "" then [.run_command]
+        elif (.entrypoint | type) == "array" then .entrypoint
+        elif (.entrypoint | type) == "string" and .entrypoint != "" then [.entrypoint]
+        else [] end
+    ' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+pm_azure_service_args_json() {
+    local service="${1:?service required}"
+    jq -c --arg service "$service" '
+        .[] | select(.service == $service) |
+        if (.run_args // "") != "" then [ .run_args ]
+        elif (.command | type) == "array" then .command
+        elif (.command | type) == "string" and .command != "" then [ .command ]
+        else [] end
+    ' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+pm_azure_acr_login_server() {
+    local out_var="${1:?output variable required}"
+    local value="${AZURE_ACR_LOGIN_SERVER:-}"
+    if [[ -z "$value" ]]; then
+        value="$(pm_azure_cli acr show \
+            --resource-group "${AZURE_RESOURCE_GROUP:?AZURE_RESOURCE_GROUP required}" \
+            --name "${AZURE_ACR_NAME:?AZURE_ACR_NAME required}" \
+            --query loginServer -o tsv --only-show-errors)"
+    fi
+    [[ -n "$value" ]] || die "Unable to resolve Azure Container Registry login server" 2
+    env_init_set AZURE_ACR_LOGIN_SERVER "$value"
+    printf -v "$out_var" '%s' "$value"
+}

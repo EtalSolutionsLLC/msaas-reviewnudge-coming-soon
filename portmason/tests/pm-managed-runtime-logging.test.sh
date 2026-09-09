@@ -3,11 +3,13 @@ set -euo pipefail
 
 source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 helpers="$source_dir/pm-helpers"
+log_helpers="$source_dir/pm-log"
 
 bash -n "$helpers"
+bash -n "$log_helpers"
 
 routing_text="$(
-    sed -n '/^pm_log_value_is_true() {/,/^# Internal: should we emit/p' "$helpers" \
+    sed -n '/^pm_log_value_is_true() {/,/^# Internal: should we emit/p' "$log_helpers" \
         | sed '$d'
 )"
 
@@ -121,11 +123,12 @@ grep -Fq 'local stderr marker' "$local_log_dir/local.log"
 
 extract_simple_function() {
     local function_name="${1:?function name required}"
+    local source_file="${2:-$helpers}"
     awk -v start="${function_name}() {" '
         $0 == start { capture=1 }
         capture { print }
         capture && $0 == "}" { exit }
-    ' "$helpers"
+    ' "$source_file"
 }
 
 eval "$(extract_simple_function bail)"
@@ -174,7 +177,7 @@ assert_terminal_event 9 'CRITICAL|Process terminated|exit_code=9' \
 assert_terminal_event 10 'ERROR|validation failed|exit_code=10' \
     bail 'validation failed' 10
 
-eval "$(extract_simple_function should_log)"
+eval "$(extract_simple_function should_log "$log_helpers")"
 export LOG_LEVEL=ERROR
 should_log CRITICAL
 if should_log WARNING; then
@@ -187,7 +190,7 @@ function_text="$(awk '
     /^log\(\) \{/ {capture=1}
     capture {print}
     capture && /^}/ {exit}
-' "$helpers")"
+' "$log_helpers")"
 
 should_log() { return 0; }
 pm_error_record() { return 0; }

@@ -5,7 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SETUP="${ROOT}/pm-setup"
 HELPERS_DB="${ROOT}/pm-helpers-db"
 
-grep -Fq 'hook_file="${MGT_SCRIPTS:-}/setup"' "$SETUP"
+grep -Fq 'hook_file="${SCRIPT_DIR}/mgt-scripts/setup"' "$SETUP"
 grep -Fq 'runtime_file="${PORTMASON_SHARE}/pm-deploy-${RUNTIME_CODE}"' "$SETUP"
 
 hook_block="$(

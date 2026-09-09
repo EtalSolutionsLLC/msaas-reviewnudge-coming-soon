@@ -100,35 +100,8 @@ persist_kv() {
 }
 
 set-docker-env-file() {
-    local file="${1:-docker-compose.yml}"
-
-    if [[ ! -f "$file" ]]; then
-        log "ERROR: $file not found." >&2
-        return 1
-    fi
-
-    if ! command -v yq >/dev/null 2>&1; then
-        log "ERROR: 'yq' (mikefarah Go version) is required but not found in PATH." >&2
-        return 1
-    fi
-
-    if [[ -z "$ENV_FILE" || ! -f "$ENV_FILE" ]]; then
-        log "ERROR: unabel to find file 'ENV_FILE' of the value isn't set." >&2
-        return 1
-    fi
-
-    log "Using env file: $ENV_FILE"
-
-    # Backup original
-    cp "$file" "${file}.bak"
-
-    # For every service:
-    # - overwrite env_file with the detected ENV_FILE
-    # This uses Go yq v4 syntax.
-    yq eval -i ".services[].env_file = \"$ENV_FILE\"" "$file"
-
-    log "Updated $file -> env_file: \"$ENV_FILE\" for all services."
-    log "Backup saved as ${file}.bak."
+    log "ERROR: set-docker-env-file is retired; configure env_file in the repository-root docker-compose.yml." >&2
+    return 2
 }
 
 urldecode() {

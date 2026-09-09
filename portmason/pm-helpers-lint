@@ -9,7 +9,6 @@ if [[ "${__PM_HELPERS_LINT_LOADED:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
 __PM_HELPERS_LINT_LOADED=1
-export __PM_HELPERS_LINT_LOADED
 
 declare -ga PM_LINT_RULE_ORDER=()
 declare -gA PM_LINT_RULE_SEVERITY=()
@@ -685,10 +684,10 @@ pm_lint_portmason_top_level_basename() {
     local remainder=""
 
     case "$path" in
-        ops/portmason/*) remainder="${path#ops/portmason/}" ;;
-        portmason/*) remainder="${path#portmason/}" ;;
+        ops/portmason-ancillary/*) remainder="${path#ops/portmason-ancillary/}" ;;
+        portmason-ancillary/*) remainder="${path#portmason-ancillary/}" ;;
         *)
-            if [[ "${PM_LINT_ROOT##*/}" == portmason ]]; then
+            if [[ "${PM_LINT_ROOT##*/}" == portmason-ancillary ]]; then
                 remainder="$path"
             fi
             ;;

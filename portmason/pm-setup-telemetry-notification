@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+: "${TELEMETRY_NOTIFICATION_DELIVERY_ADDRESS:?TELEMETRY_NOTIFICATION_DELIVERY_ADDRESS required}"
+telemetry_validate_email "$TELEMETRY_NOTIFICATION_DELIVERY_ADDRESS"
+log INFO "email notification contract ready" \
+    "delivery_address=${TELEMETRY_NOTIFICATION_DELIVERY_ADDRESS}"

@@ -28,7 +28,7 @@ jobs:
     env:
       PROJECT_DIR: site
       DEPLOY_DIR: site/deploy/prd
-      PAGES_SITE_DIR: site/deploy/prd/www
+      PAGES_SITE_DIR: site/www
       OPS_DIR: ops-and-sops
       ETALSOLUTIONSLLC_OPS_AND_SOPS_READ_TOKEN: ${{ secrets.ETALSOLUTIONSLLC_OPS_AND_SOPS_READ_TOKEN }}
 
@@ -86,6 +86,16 @@ jobs:
           set -euo pipefail
 
           pm-setup
+
+      - name: Verify GitHub Pages artifact contract
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          set -euo pipefail
+
+          test -s "${PAGES_SITE_DIR}/build-info.json"
+          test -s "${PAGES_SITE_DIR}/deploy-info.json"
+          test -s "${PAGES_SITE_DIR}/artifact-manifest.json"
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3

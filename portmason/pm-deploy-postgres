@@ -2,13 +2,7 @@
 set -euo pipefail
 
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-if ! declare -F log >/dev/null 2>&1; then
-    . "${PORTMASON_SHARE}/pm-helpers" "$@"
-fi
-if ! declare -F pm_load_generated_environment >/dev/null 2>&1; then
-    # shellcheck disable=SC1090
-    . "${PORTMASON_SHARE}/pm-helpers-db"
-fi
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
 
 pm_postgres_migration_table() {
     log DEBUG "ensuring migration ledger"
@@ -32,6 +26,13 @@ WHERE version = :'version';
 SQL
 }
 
+pm_postgres_migration_ledger() {
+    db_rt --tuples-only --no-align --field-separator=$'\t' --command='
+SELECT version, checksum_sha256
+FROM public.portmason_schema_migrations
+ORDER BY version;'
+}
+
 pm_postgres_record_migration() {
     local version="${1:?version required}"
     local checksum="${2:?checksum required}"
@@ -49,7 +50,11 @@ pm_postgres_apply_migration() {
     local version checksum existing transaction_flag
     version="$(basename "$file")"
     checksum="$(sha256sum "$file" | awk '{print $1}')"
-    existing="$(pm_postgres_migration_status "$version" | tr -d '[:space:]')"
+    if (($# >= 2)); then
+        existing="$2"
+    else
+        existing="$(pm_postgres_migration_status "$version" | tr -d '[:space:]')"
+    fi
 
     if [[ -n "$existing" ]]; then
         [[ "$existing" == "$checksum" ]] \
@@ -79,7 +84,8 @@ pm_postgres_apply_migration() {
 
 pm_postgres_apply_migrations() {
     local migration_dir="${DB_MIGRATIONS_DIR:-${SCRIPT_DIR}/db/migrations}"
-    local file count=0
+    local file version ledger_output ledger_version ledger_checksum count=0
+    local -A applied_checksums=()
 
     if [[ ! -d "$migration_dir" ]]; then
         log INFO "no migration directory; skipping" \
@@ -88,8 +94,17 @@ pm_postgres_apply_migrations() {
     fi
 
     pm_postgres_migration_table
+    if ! ledger_output="$(pm_postgres_migration_ledger)"; then
+        die "Unable to read PostgreSQL migration ledger" 2
+    fi
+    while IFS=$'\t' read -r ledger_version ledger_checksum; do
+        [[ -n "$ledger_version" ]] || continue
+        applied_checksums["$ledger_version"]="$ledger_checksum"
+    done <<<"$ledger_output"
+
     while IFS= read -r -d '' file; do
-        pm_postgres_apply_migration "$file"
+        version="$(basename "$file")"
+        pm_postgres_apply_migration "$file" "${applied_checksums[$version]-}"
         ((count+=1))
     done < <(find "$migration_dir" -maxdepth 1 -type f -name '*.sql' -print0 | sort -z)
 
@@ -146,6 +161,4 @@ main() {
     pm_deploy_db_provider "$@"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+main "$@"

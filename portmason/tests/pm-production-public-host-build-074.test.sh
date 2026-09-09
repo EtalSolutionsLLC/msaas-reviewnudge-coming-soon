@@ -16,7 +16,7 @@ make_project() {
     cat > "$project/.env" <<ENV
 APP_SLUG=reviewnudge
 DEPLOY_ENV=$deploy_env
-RUNTIME_ADAPTER_CODE=node-local
+RUNTIME_ADAPTER_CODE=bash-env
 STACK=reviewnudge${deploy_env:+-$deploy_env}
 LOCAL_DOMAIN=etal.solutions
 APP_HOST=$host
@@ -31,7 +31,7 @@ ENV
     printf '%s' "$project"
 }
 
-prd_project="$(make_project prd prd reviewnudge-prd.etal.solutions)"
+prd_project="$(make_project prd prd industries.reviewnudge.etal.solutions)"
 (
     cd "$prd_project"
     export PORTMASON_SHARE="$source_root"
@@ -42,29 +42,39 @@ prd_project="$(make_project prd prd reviewnudge-prd.etal.solutions)"
     . "$source_root/pm-helpers"
 
     [[ "$STACK" == "reviewnudge-prd" ]]
-    [[ "$APP_HOST" == "reviewnudge.etal.solutions" ]]
-    [[ "$APP_URL" == "https://reviewnudge.etal.solutions" ]]
-    [[ "$APP_BASE_URL" == "https://reviewnudge.etal.solutions" ]]
-    [[ "$WP_SITE_URL" == "https://reviewnudge.etal.solutions" ]]
+    [[ "$APP_HOST" == "industries.reviewnudge.etal.solutions" ]]
+    [[ "$APP_URL" == "https://industries.reviewnudge.etal.solutions" ]]
+    [[ "$APP_BASE_URL" == "https://industries.reviewnudge.etal.solutions" ]]
+    [[ "$WP_SITE_URL" == "https://industries.reviewnudge.etal.solutions" ]]
 
     "$source_root/pm-generate-config"
 
     grep -Fxq 'STACK=reviewnudge-prd' .env.generated
-    grep -Fxq 'APP_HOST=reviewnudge.etal.solutions' .env.generated
-    grep -Fxq 'APP_URL=https://reviewnudge.etal.solutions' .env.generated
-    grep -Fxq 'APP_BASE_URL=https://reviewnudge.etal.solutions' .env.generated
-    grep -Fxq 'WP_SITE_URL=https://reviewnudge.etal.solutions' .env.generated
-    ! grep -Fq 'reviewnudge-prd.etal.solutions' .env.generated
-
+    grep -Fxq 'APP_HOST=industries.reviewnudge.etal.solutions' .env.generated
+    grep -Fxq 'APP_URL=https://industries.reviewnudge.etal.solutions' .env.generated
+    grep -Fxq 'APP_BASE_URL=https://industries.reviewnudge.etal.solutions' .env.generated
+    grep -Fxq 'WP_SITE_URL=https://industries.reviewnudge.etal.solutions' .env.generated
     python3 - <<'PY'
 import json
 from pathlib import Path
-payload = json.loads(Path('site/config.generated.json').read_text())
+payload = json.loads(Path('site/config.public.json').read_text())
+assert payload['APP_URL'] == 'https://industries.reviewnudge.etal.solutions'
+assert payload['APP_HOST'] == 'industries.reviewnudge.etal.solutions'
+assert set(payload) == {'APP_URL', 'APP_HOST'}
+PY
+
+    export PUBLIC_BROWSER_CONFIG_KEYS='STACK APP_HOST APP_URL APP_BASE_URL WP_SITE_URL'
+    export PUBLIC_BROWSER_CONFIG_PATH="$prd_project/site/config.public.json"
+    "$source_root/pm-generate-config"
+    python3 - <<'PY'
+import json
+from pathlib import Path
+payload = json.loads(Path('site/config.public.json').read_text())
 assert payload['STACK'] == 'reviewnudge-prd'
-assert payload['APP_HOST'] == 'reviewnudge.etal.solutions'
-assert payload['APP_URL'] == 'https://reviewnudge.etal.solutions'
-assert payload['APP_BASE_URL'] == 'https://reviewnudge.etal.solutions'
-assert payload['WP_SITE_URL'] == 'https://reviewnudge.etal.solutions'
+assert payload['APP_HOST'] == 'industries.reviewnudge.etal.solutions'
+assert payload['APP_URL'] == 'https://industries.reviewnudge.etal.solutions'
+assert payload['APP_BASE_URL'] == 'https://industries.reviewnudge.etal.solutions'
+assert payload['WP_SITE_URL'] == 'https://industries.reviewnudge.etal.solutions'
 PY
 )
 
@@ -83,4 +93,4 @@ qas_project="$(make_project qas qas reviewnudge-qas.etal.solutions)"
     [[ "$APP_URL" == "https://reviewnudge-qas.etal.solutions" ]]
 )
 
-printf 'PASS: production public host omits DEPLOY_ENV while STACK remains namespaced\n'
+printf 'PASS: configured production public host remains authoritative\n'

@@ -8,7 +8,6 @@ if [[ "${__PM_HELPERS_CONFIG_LOADED:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
 __PM_HELPERS_CONFIG_LOADED=1
-export __PM_HELPERS_CONFIG_LOADED
 
 declare -ga PM_CONFIG_KEYS=()
 declare -gA PM_CONFIG_TYPE=()
@@ -31,6 +30,29 @@ pm_config_reset() {
     PM_CANONICAL_RUNTIME_SECRET_KEYS=()
     PM_CANONICAL_CONTROL_PLANE_SECRET_KEYS=()
     PM_CANONICAL_SECRET_KEYS=()
+}
+
+pm_config_prepare_base_registry() {
+    local entity file function_name
+
+    pm_config_reset
+
+    for entity in         core         application         messaging         cache         control-plane         database
+    do
+        file="${PORTMASON_SHARE}/pm-config-${entity}"
+
+        [[ -r "$file" ]] || continue
+
+        . "$file"
+
+        function_name="pm_config_${entity//-/_}"
+
+        declare -F "$function_name" >/dev/null 2>&1             || die "pm-config-${entity} does not define $function_name" 2
+
+        PM_CONFIG_ACTIVE_ENTITY="$entity" "$function_name"
+    done
+
+    pm_config_validate_registry
 }
 
 pm_config_trim() {
@@ -149,7 +171,7 @@ pm_config_key_is_registered() {
 pm_config_key_looks_secret() {
     local key="${1:?configuration key required}"
     case "$key" in
-        *_PASSWORD|*_PASS|*_TOKEN|*_SECRET|*_KEY|DATABASE_URL|DATABASE_DIRECT_URL|DB_USER|DB_ADMIN_USER|QUEUE_USER)
+        *_PASSWORD|*_PASS|*_TOKEN|*_SECRET|*_KEY|DB_URL|DB_DIRECT_URL|DB_USER|DB_ADMIN_USER|QUEUE_USER)
             return 0
             ;;
     esac
@@ -196,15 +218,14 @@ pm_config_value() {
             esac
         fi
     fi
+    if declare -F pm_secret_resolve_value >/dev/null 2>&1; then
+        pm_secret_resolve_value resolved_value "$key" "$resolved_value"
+    fi
     printf -v "$out_var" '%s' "$resolved_value"
 }
 
 pm_config_secret_override_exists() {
     local key="${1:?configuration key required}"
-    if declare -F pm_preflight_has_secret_override >/dev/null 2>&1; then
-        pm_preflight_has_secret_override "$key"
-        return
-    fi
     local line ref
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -n "$line" && "$line" == *'|'* ]] || continue
@@ -305,7 +326,7 @@ pm_config_var_kv_nul_for_service() {
 
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
-        target="${PM_CONFIG_TARGET[$key]}"
+        target="${PM_CONFIG_TARGET[$key]:-$key}"
         [[ -z "${emitted[$target]+x}" ]] || continue
         pm_config_value value "$key"
         [[ -n "$value" || "${PM_CONFIG_REQUIRED[$key]}" == required ]] || continue
@@ -329,7 +350,7 @@ pm_config_secret_binding_nul_for_service() {
 
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
-        target="${PM_CONFIG_TARGET[$key]}"
+        target="${PM_CONFIG_TARGET[$key]:-$key}"
         [[ -z "${emitted[$target]+x}" ]] || continue
         pm_config_value value "$key"
         if [[ -n "$value" ]] || pm_config_secret_override_exists "$key"; then
@@ -454,12 +475,10 @@ pm_config_validate_required_services() {
             [[ "${PM_CONFIG_REQUIRED[$key]-}" == required ]] || continue
             pm_config_value value "$key"
             if [[ -z "$value" ]] && ! pm_config_secret_override_exists "$key"; then
-                if declare -F pm_preflight_error >/dev/null 2>&1; then
-                    pm_preflight_error "config.required" "$key" \
-                        "required by service=$service owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"                else
-                    log ERROR "pm-config: required value missing" \
-                        "key=$key" "service=$service" "owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"
-                fi
+                log ERROR "pm-config: required value missing" \
+                    "key=$key" \
+                    "service=$service" \
+                    "owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"
                 missing=1
             fi
         done < <(
@@ -475,11 +494,23 @@ pm_config_validate_required_services() {
 pm_service_secret_keys() {
     local role="${1:?service role required}"
     local key extra
-    pm_config_keys_for_scopes secret "$role"
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        if declare -F pm_secret_key_is_public_exception >/dev/null 2>&1 \
+            && pm_secret_key_is_public_exception "$key"; then
+            continue
+        fi
+        printf '%s\n' "$key"
+    done < <(pm_config_keys_for_scopes secret "$role")
     IFS=',' read -r -a _pm_extra_secret_keys <<<"${PM_ADDITIONAL_SECRET_KEYS:-}"
     for extra in "${_pm_extra_secret_keys[@]}"; do
         pm_config_trim extra "$extra"
-        [[ -n "$extra" ]] && printf '%s\n' "$extra"
+        [[ -n "$extra" ]] || continue
+        if declare -F pm_secret_key_is_public_exception >/dev/null 2>&1 \
+            && pm_secret_key_is_public_exception "$extra"; then
+            continue
+        fi
+        printf '%s\n' "$extra"
     done
 }
 
@@ -500,7 +531,7 @@ pm_service_nonsecret_kv_nul() {
     local key value target
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
-        target="${PM_CONFIG_TARGET[$key]}"
+        target="${PM_CONFIG_TARGET[$key]:-$key}"
         pm_config_value value "$key"
         [[ -n "$value" || "${PM_CONFIG_REQUIRED[$key]}" == required ]] || continue
         printf '%s\0%s\0' "$target" "$value"

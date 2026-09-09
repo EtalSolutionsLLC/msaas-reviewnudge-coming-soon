@@ -2,9 +2,7 @@
 set -euo pipefail
 
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-if ! declare -F log >/dev/null 2>&1; then
-    . "${PORTMASON_SHARE}/pm-helpers" "$@"
-fi
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
 
 neon_set_context() {
     local key="${1:?key required}" value="${2-}"
@@ -68,10 +66,10 @@ neon_ensure_project() {
         "project_name=$DB_PROJECT_NAME" "region=$DB_REGION_ID" \
         "pg_version=$NEON_PG_VERSION"
     neon_api_request created POST "$create_path" "$body"
-    neon_wait_for_operations "$created"
     neon_set_context DB_PROJECT_ID "$(jq -r '.project.id // empty' <<<"$created")"
     [[ -n "$DB_PROJECT_ID" ]] \
         || die "project creation returned no project ID" 2
+    neon_wait_for_operations "$created"
 
     local branch_id endpoint_id
     branch_id="$(jq -r '.branch.id // empty' <<<"$created")"

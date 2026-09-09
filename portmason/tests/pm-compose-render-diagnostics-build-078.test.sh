@@ -14,7 +14,7 @@ export -f log die have env_init_set
 
 cat > "$temp_dir/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
-if [[ "$1" == "compose" && "$2" == "-f" && "$4" == "config" && "$5" == "--format" && "$6" == "json" ]]; then
+if [[ "$1" == "compose" && "$*" == *" config --format json" ]]; then
     printf 'invalid interpolation format for services.cloudflared.command.\n' >&2
     printf 'You may need to escape PM_NETWORK_TUNNEL_TOKEN.\n' >&2
     printf 'PM_NETWORK_TUNNEL_TOKEN=super-secret-value\n' >&2
@@ -34,9 +34,12 @@ JQ
 chmod +x "$temp_dir/bin/jq"
 
 export PORTMASON_SHARE="$source_dir"
-export SCRIPT_DIR="$temp_dir/project"
-export PM_COMPOSE_FILE="$temp_dir/project/docker-compose.yml"
-export PM_COMPOSE_OVERRIDE_FILE="$temp_dir/project/docker-compose.override.yml"
+export PROJECT_ROOT="$temp_dir/project"
+export SCRIPT_DIR="$temp_dir/project/deploy/prd"
+export PM_COMPOSE_FILE="$PROJECT_ROOT/docker-compose.yml"
+export PM_COMPOSE_OVERRIDE_FILE="$PROJECT_ROOT/docker-compose.override.yml"
+export PM_COMPOSE_PROJECT_DIRECTORY="$SCRIPT_DIR"
+mkdir -p "$SCRIPT_DIR"
 : > "$PM_COMPOSE_FILE"
 
 . "$source_dir/pm-helpers-db"
@@ -49,7 +52,9 @@ fi
 
 joined="$(printf '%s\n' "${PM_PREFLIGHT_ERRORS[@]}")"
 grep -Fq 'compose.model|docker-compose.yml|could not be rendered by:' <<<"$joined"
-grep -Fq 'docker compose -f' <<<"$joined"
+grep -Fq 'docker compose --project-directory' <<<"$joined"
+grep -Fq "$SCRIPT_DIR" <<<"$joined"
+grep -Fq "$PROJECT_ROOT/docker-compose.yml" <<<"$joined"
 grep -Fq 'invalid interpolation format' <<<"$joined"
 grep -Fq 'PM_NETWORK_TUNNEL_TOKEN=***REDACTED***' <<<"$joined"
 ! grep -Fq 'super-secret-value' <<<"$joined"

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+pm_local_compose_up() {
+    local max_attempts="${PM_REGISTRY_PULL_ATTEMPTS:-3}"
+    local attempt rc=0 error_file delay_seconds
+
+    for attempt in $(seq 1 "$max_attempts"); do
+        error_file="$(mktemp)"
+        if "${PM_COMPOSE_CMD[@]}" up "$@" 2> >(tee "$error_file" >&2); then
+            rm -f -- "$error_file"
+            return 0
+        else
+            rc=$?
+        fi
+
+        if ! grep -Eiq '(unexpected )?EOF|TLS handshake timeout|connection reset|i/o timeout|temporary failure|service unavailable' "$error_file" \
+            || ((attempt >= max_attempts)); then
+            rm -f -- "$error_file"
+            return "$rc"
+        fi
+
+        rm -f -- "$error_file"
+        delay_seconds=$((attempt * 3))
+        log WARN "transient container registry failure; retrying Compose deployment" \
+            "attempt=$attempt/$max_attempts" \
+            "delay_seconds=$delay_seconds"
+        sleep "$delay_seconds"
+    done
+
+    return "$rc"
+}
+
+pm_local_wait_for_db() {
+    local service=telemetry
+    local attempt
+    local max_attempts="${DATABASE_STARTUP_ATTEMPTS:-30}"
+    local delay_ms="${DATABASE_STARTUP_DELAY_MS:-1000}"
+    local delay_seconds
+
+    delay_seconds="$(awk -v ms="$delay_ms" 'BEGIN { printf "%.3f", ms / 1000 }')"
+
+    for attempt in $(seq 1 "$max_attempts"); do
+        if PGPASSWORD="${TELEMETRY_DB_PASSWORD}" "${PM_COMPOSE_CMD[@]}" exec -T \
+            -e PGPASSWORD \
+            "$service" \
+            pg_isready --username "$TELEMETRY_DB_USER" --dbname "$TELEMETRY_DB_NAME" >/dev/null 2>&1; then
+            log INFO "database service is ready" \
+                "service=$service" \
+                "attempt=$attempt"
+            return 0
+        fi
+
+        log DEBUG "waiting for database readiness" \
+            "service=$service" \
+            "attempt=$attempt/$max_attempts"
+        sleep "$delay_seconds"
+    done
+
+    "${PM_COMPOSE_CMD[@]}" logs --tail=100 "$service" >&2 || true
+    die "Local database service did not become ready: $service" 2
+}
+
+pm_deploy_telemetry_db_platform() {
+    [[ "${PM_TELEMETRY_DB_PLATFORM_CODE:-}" == "local" ]] \
+        || die "pm-deploy-telemetry-db-local requires TELEMETRY_DB_PROVIDER_PLATFORM_CODE=<provider>-local" 2
+
+    pm_compose_load_model
+
+    local service
+    service=telemetry
+
+    [[ ${#PM_COMPOSE_CMD[@]} -gt 0 ]] || pm_compose_init_command
+
+    log INFO "pm-deploy-telemetry-db-local: starting database service" \
+        "service=$service"
+
+    pm_local_compose_up -d --remove-orphans "$service"
+    pm_local_wait_for_db
+
+    log INFO "pm-deploy-telemetry-db-local: database platform deployment complete" \
+        "service=$service"
+}
+
+main() {
+    pm_deploy_telemetry_db_platform "$@"
+}
+
+main "$@"
