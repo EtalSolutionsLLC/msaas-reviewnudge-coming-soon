@@ -87,12 +87,15 @@ jobs:
 
           pm-setup
 
+<<<<<<< HEAD
       - name: Verify GitHub Pages artifact contract
         shell: bash
         run: |
           cd "${GITHUB_WORKSPACE}"
           set -euo pipefail
 
+=======
+>>>>>>> 38f5276 (chore: sync 2026-09-09 13:29:18 UTC)
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
