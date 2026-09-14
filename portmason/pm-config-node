@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-pm_config_node() {
-    local scopes='application,web,app,jobs,worker'
-    pm_config_register NODE_ENV var "$scopes" NODE_ENV optional
-    pm_config_register PORT var "$scopes" PORT optional
-    pm_config_register HOST var "$scopes" HOST optional
-}

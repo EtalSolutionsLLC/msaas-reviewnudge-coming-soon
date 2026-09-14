@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-pm_godaddy_validate_config() {
-    [[ "${PM_ACME_DNS_PROVIDER:-godaddy}" == godaddy ]] \
-        || die "pm-helpers-godaddy loaded for the wrong provider" 2
-}

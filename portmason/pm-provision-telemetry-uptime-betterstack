@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-. "${PORTMASON_SHARE}/pm-helpers" "$@"
-
-: "${APP_URL:?APP_URL required for Better Stack uptime monitoring}"
-: "${TELEMETRY_UPTIME_API_TOKEN:?TELEMETRY_UPTIME_API_TOKEN required}"
-log INFO "Better Stack uptime provisioning contract ready" "target=${APP_URL}"

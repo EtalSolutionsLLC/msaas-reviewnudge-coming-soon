@@ -1,7 +1,0 @@
-# PM Lint exceptions are explicit, narrow, accountable, and temporary.
-#
-# Format:
-# RULE|PATH_GLOB|OWNER|APPROVED_DATE|REVIEW_DATE|REASON
-#
-# Example:
-# PM003|ops/portmason/pm-legacy-tool|David Omer|2026-07-08|2026-10-01|Legacy output migration scheduled for Q3

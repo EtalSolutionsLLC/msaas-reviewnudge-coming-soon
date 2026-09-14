@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-. "${PORTMASON_SHARE}/pm-helpers" "$@"
-
-log "pm-deploy-static: NOOP"
