@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-pm_cloudflared_validate_config() {
-    [[ "${PM_EDGE_TUNNEL_PROVIDER:-cloudflared}" == cloudflared ]] \
-        || die "pm-helpers-cloudflared loaded for the wrong provider" 2
-}

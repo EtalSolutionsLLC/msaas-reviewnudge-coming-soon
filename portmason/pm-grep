@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
-
-grep -RIn --exclude-dir=logs --exclude-dir=capture --exclude-dir=.git --exclude-dir=.github --exclude-dir=.tmp "${1}" "${2:-.}" 

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-pm_config_google_tag_manager() {
-    local scopes='analytics,web,app,static,observability'
-    pm_config_register GTM_CONTAINER_ID var "$scopes" GTM_CONTAINER_ID required
-}

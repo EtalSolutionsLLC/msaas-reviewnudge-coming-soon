@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-pm_config_venv() { :; }

@@ -1,8 +1,0 @@
-{
-  "name": "critical-errors",
-  "description": "Count critical and fatal log records in the requested time window.",
-  "measure": { "type": "count" },
-  "match": {
-    "severity": ["CRITICAL", "FATAL", "ALERT", "EMERGENCY"]
-  }
-}
