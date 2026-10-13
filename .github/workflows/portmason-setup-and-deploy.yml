@@ -24,7 +24,8 @@ concurrency:
 jobs:
   setup:
     runs-on: ubuntu-latest
-
+    environment:
+      name: github-pages
     env:
       PROJECT_DIR: site
       DEPLOY_DIR: site/deploy/prd
@@ -71,10 +72,24 @@ jobs:
           printf 'PORTMASON_SHARE=%s\n' "${portmason_share}" >> "${GITHUB_ENV}"
           printf '%s\n' "${portmason_share}" >> "${GITHUB_PATH}"
 
+      - name: Install SOPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sops_binary="${RUNNER_TEMP}/sops-v3.13.3.linux.amd64"
+          curl --fail --silent --show-error --location --retry 3 \
+            'https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64' \
+            --output "${sops_binary}"
+          printf '%s  %s\n' \
+            'e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b' \
+            "${sops_binary}" | sha256sum --check --status
+          sudo install -m 0755 "${sops_binary}" /usr/local/bin/sops
+
       - name: Run Portmason setup
         working-directory: ${{ env.DEPLOY_DIR }}
         shell: bash
         env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
           GITHUB_ACTIONS: "true"
           PM_NO_REDIRECT: "1"
           PM_OFFICIAL_BUILD: "true"
@@ -84,6 +99,10 @@ jobs:
           PM_STATIC_COLLECTION_DATE: ${{ inputs.collection_date || '' }}
         run: |
           set -euo pipefail
+          [[ -n "${SOPS_AGE_KEY}" ]] || {
+            echo "::error::Add the SOPS_AGE_KEY Actions secret containing the age private key for this project's encrypted environment."
+            exit 1
+          }
 
           pm-setup
 
