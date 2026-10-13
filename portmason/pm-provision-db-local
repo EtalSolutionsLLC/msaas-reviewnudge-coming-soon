@@ -46,14 +46,12 @@ pm_provision_db_platform() {
 
     local attempt
     local max_attempts="${PM_DB_READY_ATTEMPTS:-30}"
-    local wait_seconds="${PM_DB_READY_INTERVAL_SECONDS:-1}"
+    local wait_seconds="${PM_DB_READY_INTERVAL_SECONDS:-3}"
 
     for ((attempt = 1; attempt <= max_attempts; attempt++)); do
         if "${PM_COMPOSE_CMD[@]}" exec -T "$service" \
-            pg_isready \
-                --host localhost \
-                --port "$DB_PORT" \
-                --username "$DB_ADMIN_USER" \
+            sh -c 'exec pg_isready --host localhost --port "${PGPORT:-5432}" --username "$1"' \
+                pm-db-readiness "$DB_ADMIN_USER" \
                 >/dev/null 2>&1; then
             log INFO "pm-provision-db-local: database service ready" \
                 "service=$service" \

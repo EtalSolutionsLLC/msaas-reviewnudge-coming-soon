@@ -98,7 +98,7 @@ def read_stdin() -> bytearray:
         value.extend(chunk)
 
 
-def write_stdout(value: bytearray) -> None:
+def write_stdout(value: bytes | bytearray) -> None:
     view = memoryview(value)
     while view:
         written = os.write(1, view)
@@ -161,26 +161,109 @@ def run_with_secrets(bindings: list[str], command: list[str]) -> None:
         for secret in secrets:
             wipe(secret)
 
+def sops_environment() -> dict[str, str]:
+    """Retain the requested placeholder defaults; explicit settings take priority."""
+    environment = os.environ.copy()
+	#BEGIN PAIR 20261009
+    if not environment.get("SOPS_AGE_RECIPIENTS"):
+        environment["SOPS_AGE_RECIPIENTS"] = 'age1zxddpnaexu6uu7tcj9k7rtwkvhfx7en8vsnyax4udmw0v8gxzypqxy309e'
+    if not environment.get("SOPS_AGE_KEY"):
+        environment["SOPS_AGE_KEY"] = 'AGE-SECRET-KEY-19YG6V5QMVWLDCUZTUDX6PSQR0Q73ANF6Q5EA9CX8V7YXVXA0LAQQ7CFLLG'
+	#END PAIR 20261009
+	#BEGIN PAIR 20261005
+    # if not environment.get("SOPS_AGE_RECIPIENTS"):
+    #     environment["SOPS_AGE_RECIPIENTS"] = 'age1j39h394nc4l5cpxjlghfardcnwz44yzhcsskqrjm9wtqg2jpg9tqgvdp4l'
+    # if not environment.get("SOPS_AGE_KEY"):
+    #     environment["SOPS_AGE_KEY"] = 'AGE-SECRET-KEY-1UNECGAYWD5MKAPXD8G835HS00ACH4WU5XCASWSQW56SW7WXANKPQYT60PA'
+	#END PAIR 20261005
+	#BEGIN PAIR 20260927
+    # if not environment.get("SOPS_AGE_RECIPIENTS"):
+    #     environment["SOPS_AGE_RECIPIENTS"] = 'age1ddvumycgvlx3zknx54helghqs89kexyh7kgv2e9j48f3039hc4fscxngn3'
+    # if not environment.get("SOPS_AGE_KEY"):
+    #     environment["SOPS_AGE_KEY"] = 'AGE-SECRET-KEY-1S2ZY4FQYR2L5NFHNJ0MQSEW552T6N77KEWRN8U5V3KRFY0VV7GWSC3MKR3'
+	#END PAIR 20260927
+
+    return environment
+
+
+def sops_run(arguments: list[str], value: bytes | None = None) -> bytes:
+    """One subprocess boundary for SOPS; diagnostics never enter stdout."""
+    result = subprocess.run(
+        ["sops", *arguments], input=value, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, env=sops_environment(),
+    )
+    if result.returncode:
+        # Forward SOPS's diagnostic so missing keys and malformed input are actionable.
+        sys.stderr.buffer.write(result.stderr)
+        raise RuntimeError(f"SOPS {arguments[0]} failed (exit {result.returncode})")
+    return result.stdout
+
+
+def sops_format_args(target: pathlib.Path, *, output: bool = False) -> list[str]:
+    """Recognize Portmason dotenv filenames that SOPS cannot infer."""
+    name = target.name
+    if not (name == ".env" or name.startswith(".env.") or name.endswith(".env")):
+        return []
+    arguments = ["--input-type", "dotenv"]
+    if output:
+        arguments.extend(["--output-type", "dotenv"])
+    return arguments
+
+
+def sops_is_encrypted(filename: str) -> bool:
+    target = pathlib.Path(filename).resolve()
+    if not target.is_file():
+        raise ValueError(f"not a file: {filename}")
+    status = json.loads(sops_run(["filestatus", *sops_format_args(target), str(target)]))
+    if not isinstance(status, dict) or type(status.get("encrypted")) is not bool:
+        raise ValueError("unexpected SOPS file status")
+    return status["encrypted"]
+
+
+def sops_transform(filename: str, action: str) -> bytes:
+    target = pathlib.Path(filename).resolve()
+    encrypted = sops_is_encrypted(str(target))
+    if encrypted == (action == "encrypt"):
+        return target.read_bytes()
+    return sops_run([action, *sops_format_args(target, output=True), str(target)])
+
+
+def atomic_write(target: pathlib.Path, value: bytes) -> None:
+    import tempfile
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".pm-sops-")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def sops_file(filename: str, action: str, stdout: bool) -> None:
+    target = pathlib.Path(filename).resolve()
+    encrypted = sops_is_encrypted(str(target))
+    if encrypted == (action == "encrypt"):
+        if stdout:
+            write_stdout(target.read_bytes())
+        return
+    output = sops_run([action, *sops_format_args(target, output=True), str(target)])
+    if stdout:
+        write_stdout(output)
+        return
+    # Preserve the original in an owner-only backup before replacing it.
+    atomic_write(pathlib.Path(str(target) + ".bak"), target.read_bytes())
+    atomic_write(target, output)
+    print(f"SOPS {action} completed: {filename}", file=sys.stderr)
+
+
 def sops_decrypt_file(filename):
-	with open(filename, "r", encoding="utf-8") as f:
-		cipher_line_count = sum(1 for _ in f)
-	print("Decrypting SOPS file '" + filename + "' with " + str(cipher_line_count) + " cipher lines ...", file=sys.stderr)
-	try:
-		result = subprocess.run(
-			["sops", "-d", filename],
-			capture_output=True,
-			text=True,
-			check=True,
-		)
+    return sops_transform(filename, "decrypt").decode("utf-8")
 
-		plaintext_line_count = len(result.stdout.splitlines())
-		print("Successfully decrypted SOPS file '" + filename + "' with " + str(plaintext_line_count) + " plaintext lines...", file=sys.stderr)
 
-		return result.stdout
-
-	except (subprocess.CalledProcessError, OSError):
-		raise RuntimeError("Unable to decrypt file '" + filename + "'") from None
-		
 def resolve_env_file(filename):
 	"""Resolve dotenv dependencies through the existing secret-provider router."""
 	import importlib.machinery
@@ -316,82 +399,30 @@ def resolve_env_file(filename):
 
 def encrypt_file(filename, plaintext, file_format="dotenv"):
     """Encrypt in memory; write only ciphertext, replacing atomically."""
-    import os
-    import pathlib
-    import subprocess
-    import tempfile
-
     target = pathlib.Path(filename).resolve()
-    recipient = os.environ.get("SOPS_AGE_RECIPIENTS", "").strip()
+    recipient = sops_environment().get("SOPS_AGE_RECIPIENTS", "").strip()
     if not recipient:
         raise RuntimeError(
             "SOPS_AGE_RECIPIENTS is required to encrypt generated files"
         )
 
-    try:
-        result = subprocess.run(
-            [
-                "sops",
-                "--config=/dev/null",
-                "--encrypt",
-                f"--age={recipient}",
-                f"--input-type={file_format}",
-                f"--output-type={file_format}",
-                f"--filename-override={target}",
-                "/dev/stdin",
-            ],
-            input=plaintext,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or "").strip()
-        raise RuntimeError(
-            f"Unable to encrypt generated file {target}: {detail}"
-        ) from exc
-
-    ciphertext = result.stdout
+    ciphertext = sops_run(
+        [
+            "--encrypt", "--config=/dev/null",# f"--age={recipient}",
+            f"--input-type={file_format}", f"--output-type={file_format}",
+            f"--filename-override={target}", "/dev/stdin",
+        ],
+        plaintext.encode("utf-8"),
+    )
     if not ciphertext.strip():
         raise RuntimeError(f"Encryption returned empty output for {target}")
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=".pm-encrypted-",
-    )
-    try:
-        os.chmod(temporary, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(ciphertext)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    atomic_write(target, ciphertext)
 
 def write_resolved_env(filename, public_filename):
 	"""Serialize resolved values without another interpolation pass."""
-	import importlib.machinery
-	import tempfile
-	renderer = importlib.machinery.SourceFileLoader(
-		"pm_env_renderer", str(pathlib.Path(__file__).with_name("pm-util-render-env"))
-	).load_module()
 	keys = os.environ.get("__PM_RESOLVED_ENV_KEYS", "").split(":")
 	if not any(keys):
-		source = os.environ.get("ENV_FILE")
-		if not source:
-			raise RuntimeError("ENV_FILE is required to collect configuration keys")
-		log("Decrypting file '" + source + "' ...")
-		plaintext = sops_decrypt_file(source)
-		keys = list(dict.fromkeys(re.findall(
-			r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=",
-			plaintext,
-		)))
-		log("Found " + str(len(keys)) + " keys in '" + source + "'.")
-	if not keys:
-		raise RuntimeError("Refusing to generate an empty environment")
+		raise RuntimeError("resolved environment keys are missing; run resolve-env before serialization")
 	public, lines = {}, []
 	for key in filter(None, keys):
 		value = os.environ[key]
@@ -430,11 +461,22 @@ def main() -> int:
 	encrypt_parser.add_argument("filename")
 	encrypt_parser.add_argument("--format", choices=("dotenv", "json"), default="dotenv")
 
+	sops_parser = subparsers.add_parser("sops")
+	sops_parser.add_argument("action", choices=("encrypt", "decrypt", "status"))
+	sops_parser.add_argument("filename")
+	sops_parser.add_argument("--stdout", action="store_true")
+
 	args = parser.parse_args()
 	harden_process()
 
 	try:
-		if args.command == "encrypt-file":
+		if args.command == "sops":
+			if args.action == "status":
+				encrypted = sops_is_encrypted(args.filename)
+				print("SOPS encrypted" if encrypted else "Not SOPS encrypted")
+				return 0 if encrypted else 1
+			sops_file(args.filename, args.action, args.stdout)
+		elif args.command == "encrypt-file":
 			encrypt_file(args.filename, sys.stdin.read(), args.format)
 		elif args.command == "resolve-env":
 			resolve_env_file(args.filename)

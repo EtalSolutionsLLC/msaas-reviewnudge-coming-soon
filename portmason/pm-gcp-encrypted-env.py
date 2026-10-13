@@ -19,8 +19,10 @@ try:
         if index + 1 >= len(args):
             raise RuntimeError("Missing environment file")
         result = subprocess.run(
-            ["sops", "--decrypt", "--input-type", "json",
-             "--output-type", "json", args[index + 1]],
+            [sys.executable, os.path.join(
+                os.environ.get("PORTMASON_SHARE", os.path.dirname(os.path.realpath(__file__))),
+                "pm-secret.py"),
+             "sops", "decrypt", "--stdout", "--", args[index + 1]],
             capture_output=True, text=True, timeout=60,
         )
         if result.returncode:

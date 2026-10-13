@@ -134,7 +134,8 @@ pm_observability_local_compose() {
   local overlay="${PM_COMPOSE_FILE:-docker-compose.observability.yml}"
   [[ "$overlay" == /* ]] || overlay="${compose_project_dir}/${overlay}"
   [[ -r "$generated_env" && -r "$overlay" ]] || die "observability Compose inputs are not readable" 2
-  docker compose --project-directory "$compose_project_dir" --env-file "$generated_env" \
+  python3 "${PORTMASON_SHARE}/pm-compose-encrypted.py" \
+    --project-directory "$compose_project_dir" --env-file "$generated_env" \
     -f "$overlay" "$@"
 }
 

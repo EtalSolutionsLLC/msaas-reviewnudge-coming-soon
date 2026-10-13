@@ -120,6 +120,9 @@ pm_db_mariadb_parse_url() {
     return 0
 }
 
+local_db_build_url() {
+	pm_db_mariadb_build_url "$@"
+}
 pm_db_mariadb_build_url() {
     local out_var="${1:?output variable required}"
     local host="${2:?host required}"

@@ -7,5 +7,5 @@ pm_config_apply_local() {
         adapter="${RUNTIME_ADAPTER_CODE#*-}"
     fi
     [[ "$adapter" == local ]] || return 0
-    pm_config_write_local_files
+    : # Containers receive the complete encrypted .env.generated.
 }

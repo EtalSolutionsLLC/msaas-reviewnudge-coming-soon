@@ -96,3 +96,11 @@ On first visit, the page chooses the first supported language in the browser's p
 ## Build 114 viewport-target staging
 
 Build 114 restores the Portmason viewport surface for explicit section navigation. Clicking a same-page link centers short section content within the usable viewport and fills the remaining space above and below inside that section, preventing neighboring sections from showing through. Tall sections remain top-aligned beneath the sticky header. Wheel, touch, keyboard, and scrollbar navigation remain native and unsnapped.
+
+## Build 116 Netherlands-first language support
+
+Build 116 adds a complete Dutch (`nl-NL`) content bundle for the Netherlands-first international launch. Browser language detection recognizes Dutch regional preferences such as `nl-BE`, while the existing globe selector and one-year preference cookie continue to provide an explicit override. The Coming Soon site now supports the existing top ten language set plus Dutch.
+
+## 2026-07-16 RTL rollout gate
+
+Standard Arabic (`ar`) and Urdu (`ur-PK`) are held from the public July 20 rollout pending native-language and RTL presentation review. Their complete catalogs remain in the repository, but they are excluded from the language selector, browser-language resolution, and preference-cookie resolution. The public rollout exposes the remaining nine locales.

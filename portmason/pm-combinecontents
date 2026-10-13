@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-SOURCE_DIR="${1:-.}"
-OUTPUT_FILE="${2:-combined.txt}"
+OUTPUT_FILE="${1:-"./combined.txt"}"
 
 : > "$OUTPUT_FILE"
 
-find "$SOURCE_DIR" \
+find "." \
   -type f \
   ! -path "*/.git/*" \
   ! -path "*/node_modules/*" \
   ! -path "*/dist/*" \
   ! -path "*/build/*" \
   ! -path "*/coverage/*" \
+  ! -path "*/capture/*" \
   | sort | while read -r file; do
 
     echo "================================================================================" >> "$OUTPUT_FILE"
@@ -25,5 +24,7 @@ find "$SOURCE_DIR" \
 
     printf "\n\n" >> "$OUTPUT_FILE"
 done
+
+pm-chunk-file "$OUTPUT_FILE"
 
 echo "Combined contents written to: $OUTPUT_FILE"

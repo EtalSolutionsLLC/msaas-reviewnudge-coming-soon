@@ -5,6 +5,7 @@ import re
 import shlex
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -60,9 +61,19 @@ def parse_env_file(path: Path | None) -> dict[str, str]:
     if path is None:
         return values
 
-    for raw_line in path.read_text(
-        encoding="utf-8"
-    ).splitlines():
+    share = Path(os.environ.get(
+        "PORTMASON_SHARE", str(Path(__file__).resolve().parent)
+    ))
+    result = subprocess.run(
+        [sys.executable, str(share / "pm-secret.py"),
+         "sops", "decrypt", "--stdout", "--", str(path)],
+        text=True,
+        encoding="utf-8",
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+
+    for raw_line in result.stdout.splitlines():
 
         line = raw_line.strip()
 

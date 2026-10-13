@@ -1,0 +1,10 @@
+{
+  "waitlist": {
+    "invalidEmail": "Voer een geldig e-mailadres in.",
+    "unavailable": "De wachtlijst is bijna klaar. Probeer het binnenkort opnieuw.",
+    "verificationEndpointUnreachable": "Het verificatie-eindpunt van de wachtlijst kon niet worden bereikt.",
+    "verificationTimeout": "Het verificatieverzoek voor de wachtlijst heeft te lang geduurd.",
+    "verificationFailed": "Ik kon niet bevestigen dat je e-mailadres aan de lijst is toegevoegd. Probeer het opnieuw. Referentie: {traceId}",
+    "submissionFailed": "Ik kon niet bevestigen dat je e-mailadres aan de lijst is toegevoegd. Probeer het opnieuw. Referentie: {traceId}"
+  }
+}

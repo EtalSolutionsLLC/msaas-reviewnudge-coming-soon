@@ -11,15 +11,7 @@ write_env_file_for_service_compat() {
     local service="${2:?service required}"
     local role="${3:?role required}"
 
-    if declare -F pm_gcp_write_env_file_for_service >/dev/null 2>&1; then
-        pm_gcp_write_env_file_for_service "$out_var" "$service" "$role"
-    elif declare -F write_env_file_for_service >/dev/null 2>&1; then
-        write_env_file_for_service "$out_var" "$service" "$role"
-    elif declare -F pm_gcp_write_env_file_for_role >/dev/null 2>&1; then
-        pm_gcp_write_env_file_for_role "$out_var" "$role"
-    else
-        write_env_file_for_role "$out_var" "$role"
-    fi
+    pm_portmason_write_env_file_for_service_or_role "$out_var"
 
     pm_gcp_filter_reserved_env_file "${!out_var}"
     pm_gcp_append_queue_env "${!out_var}"
@@ -781,8 +773,8 @@ deploy_cloud_run_service() {
     local service="${1:?service required}"
     local role="${2:?role required}"
     local image="${3:?image required}"
-    local resource service_account env_file="" cloudsql_connections="" pinned_traffic="" previous_revision="" staged_revision=""
-    local -a env_flags=() secret_flags=() command_flags=() cloudsql_flags=() traffic_flags=() deploy_flags=()
+    local resource service_account staged_env_file="" cloudsql_connections="" pinned_traffic="" previous_revision="" staged_revision=""
+    local -a env_flags=() command_flags=() cloudsql_flags=() traffic_flags=() deploy_flags=()
     local -a access_flags=(--allow-unauthenticated)
     local container_port="${PORT:-8080}"
     local startup_probe="httpGet.path=${PM_HEALTH_PATH:-/livez},initialDelaySeconds=15,periodSeconds=10,timeoutSeconds=10,failureThreshold=30"
@@ -804,9 +796,9 @@ deploy_cloud_run_service() {
             "resource=$resource" "action=stage-without-traffic"
     fi
     runtime_service_account service_account "$service"
-    write_env_file_for_service_compat env_file "$service" "$role"
-    env_flags=(--env-vars-file "$env_file")
-    readarray -d '' -t secret_flags < <(secret_args_for_service_compat "$service" "$role")
+    write_env_file_for_service_compat staged_env_file "$service" "$role"
+    env_flags=(--env-vars-file "$staged_env_file")
+
     service_run_once_args "$service" command_flags
     pm_gcp_cloud_sql_connections_csv cloudsql_connections
     [[ -z "$cloudsql_connections" ]] \
@@ -815,6 +807,15 @@ deploy_cloud_run_service() {
     if [[ "$role" == "worker" ]]; then
         access_flags=(--no-allow-unauthenticated --ingress internal)
     fi
+
+    local -a cscmd=(
+        gcloud run services update \
+			"$resource" \
+	        --region "$REGION" \
+ 			--clear-secrets
+    )
+	log INFO "Clearing secrets for "resource=$resource" in "region=$REGION""
+	log_cmd "${cscmd[@]}"
 
     local -a cmd=(
         gcloud run deploy "$resource"
@@ -830,7 +831,6 @@ deploy_cloud_run_service() {
         --startup-probe "$startup_probe"
         "${cloudsql_flags[@]}"
         "${env_flags[@]}"
-        "${secret_flags[@]}"
         "${command_flags[@]}"
     )
 
@@ -839,19 +839,19 @@ deploy_cloud_run_service() {
         "service_account=$service_account"
     log_cmd "${cmd[@]}"
     if ! "${cmd[@]}" >/dev/null; then
-        rm -f "$env_file"
+        rm -f "$staged_env_file"
         die "Cloud Run service deployment failed: $resource" 2
         return 2
     fi
     if [[ -n "$pinned_traffic" ]]; then
         if ! pm_gcp_wait_for_staged_revision staged_revision "$resource" "$previous_revision"; then
-            rm -f "$env_file"
+            rm -f "$staged_env_file"
             return 2
         fi
         log INFO "staged Cloud Run revision is Ready; traffic remains pinned" \
             "resource=$resource" "revision=$staged_revision"
     fi
-    rm -f "$env_file"
+    rm -f "$staged_env_file"
 
     local url
     url="$(gcloud run services describe "$resource" \
@@ -893,14 +893,13 @@ deploy_cloud_run_job() {
     local service="${1:?service required}"
     local role="${2:?role required}"
     local image="${3:?image required}"
-    local resource service_account action env_file="" cloudsql_connections=""
+    local resource service_account action staged_env_file="" cloudsql_connections=""
     local -a env_flags=() secret_flags=() command_flags=() cloudsql_flags=()
 
     resource_name resource "$service"
     runtime_service_account service_account "$service"
-    write_env_file_for_service_compat env_file "$service" "$role"
-    env_flags=(--env-vars-file "$env_file")
-    readarray -d '' -t secret_flags < <(secret_args_for_service_compat "$service" "$role")
+    write_env_file_for_service_compat staged_env_file "$service" "$role"
+    env_flags=(--env-vars-file "$staged_env_file")
     service_command_args "$service" command_flags
     pm_gcp_cloud_sql_connections_csv cloudsql_connections
     [[ -z "$cloudsql_connections" ]] \
@@ -920,7 +919,6 @@ deploy_cloud_run_job() {
         --service-account "$service_account"
         "${cloudsql_flags[@]}"
         "${env_flags[@]}"
-        "${secret_flags[@]}"
         "${command_flags[@]}"
     )
 
@@ -929,11 +927,11 @@ deploy_cloud_run_job() {
         "action=$action" "service_account=$service_account"
     log_cmd "${cmd[@]}"
     if ! "${cmd[@]}" >/dev/null; then
-        rm -f "$env_file"
+        rm -f "$staged_env_file"
         die "Cloud Run job deployment failed: $resource" 2
         return 2
     fi
-    rm -f "$env_file"
+    rm -f "$staged_env_file"
     log INFO "Cloud Run job ready" "resource=$resource"
     ensure_cloud_run_job_schedule "$service" "$resource" "$service_account"
 }
@@ -1012,17 +1010,16 @@ pm_deploy_runtime_platform() {
     # Rebuild derived database URLs from managed credentials before the generic
     # runtime secret synchronization. This prevents sentinel values reloaded by
     # sourced observability modules from replacing valid application URLs.
-    if pm_db_has_configuration; then
-        pm_db_call_required pm_db_bridge_deploy
-    fi
-    pm_gcp_sync_project_runtime_secrets
+    # if pm_db_has_configuration; then
+    #     pm_db_call_required pm_db_bridge_deploy
+    # fi
+#    pm_gcp_sync_project_runtime_secrets
 
     local service role image has_build service_account deployed=0
     while IFS=$'\t' read -r service role image has_build; do
         runtime_service_account service_account "$service"
         ensure_log_ingest_service_account "$service_account"
         ensure_gcp_log_ingest "$service_account"
-        bind_service_secret_access_compat "$service_account" "$service" "$role"
         deploy_compose_service "$service" "$role" "$image" "$has_build"
         deployed=$((deployed + 1))
     done < <(pm_compose_observability_service_tsv log-ingest)

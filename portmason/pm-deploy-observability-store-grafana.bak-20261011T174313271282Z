@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability" "$@"
+
+[[ "${OBSERVABILITY_STORE_PROVIDER_CODE:-}" == grafana ]] \
+    || die "grafana store deployment requires OBSERVABILITY_STORE_PROVIDER_PLATFORM_CODE=grafana-<platform>" 2
+[[ "${OBSERVABILITY_STORE_PLATFORM_CODE:-}" != local ]] || return 0
+
+pm_observability_require_compose_service store
+
+: "${OBSERVABILITY_OTEL_EXPORTER_OTLP_ENDPOINT:?Grafana Cloud OTLP exporter endpoint required}"
+: "${OBSERVABILITY_OTLP_INSTANCE_ID:?Grafana Cloud OTLP instance ID required}"
+: "${OBSERVABILITY_OTLP_AUTH_TOKEN:?Grafana Cloud OTLP authentication token required}"
+
+otlp_endpoint="${OBSERVABILITY_OTEL_EXPORTER_OTLP_ENDPOINT%/}"
+[[ "$otlp_endpoint" == */v1/metrics ]] || otlp_endpoint="${otlp_endpoint}/v1/metrics"
+basic_credential="$(printf '%s' "${OBSERVABILITY_OTLP_INSTANCE_ID}:${OBSERVABILITY_OTLP_AUTH_TOKEN}" | base64 | tr -d '\n')"
+http_code="$(printf 'header = "Authorization: Basic %s"\n' "$basic_credential" \
+    | curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --request POST --header 'Content-Type: application/x-protobuf' --data-binary '' \
+        --config - "$otlp_endpoint")"
+[[ "$http_code" == 200 ]] || log ERROR "Grafana Cloud OTLP authentication probe failed with HTTP $http_code" 2
+unset basic_credential
+log INFO "Grafana Cloud OTLP endpoint verified" "endpoint=$otlp_endpoint"

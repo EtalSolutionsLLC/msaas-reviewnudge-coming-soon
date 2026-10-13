@@ -22,8 +22,6 @@ if [[ -z ${PM_ENTRY_SCRIPT+x} ]]; then
     log "PM_ENTRY_SCRIPT: ${PM_ENTRY_SCRIPT}"
 fi
 
-export SOPS_AGE_RECIPIENTS="age1ddvumycgvlx3zknx54helghqs89kexyh7kgv2e9j48f3039hc4fscxngn3"
-
 # Run-level error collection. Entry scripts may print a concise summary at the
 # end without forcing every implementation layer to repeat its diagnostics.
 declare -ga PM_ERROR_SUMMARY_ITEMS=()
@@ -58,24 +56,20 @@ pm_error_summary_print() {
     PM_ERROR_SUMMARY_PRINTED=1
     PM_ERROR_SUMMARY_ACTIVE=1
 
-    # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
-    printf '\n========== ERROR SUMMARY (%s) ==========\n' "$count" >&2
     if (( count == 0 )); then
-        # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
-        printf 'No errors encountered.\n' >&2
+        log INFO "Error summary: no errors encountered."
     else
+        log ERROR "Error summary: ${count} recorded item(s)."
         for item in "${PM_ERROR_SUMMARY_ITEMS[@]}"; do
             ((index += 1))
             severity="${item%%|*}"
             message="${item#*|}"
-            # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
-            printf '%2d. [%s] %s\n' "$index" "$severity" "$message" >&2
+            log "$severity" "${index}. ${message}"
         done
     fi
-    # PM-LINT-MACHINE-OUTPUT: deliberate compact operator summary.
-    printf '=========================================\n' >&2
 
     PM_ERROR_SUMMARY_ACTIVE=0
+    return 0
 }
 
 #export DEPLOY_ENV="${DEPLOY_ENV:-}"
@@ -232,46 +226,31 @@ ensure_env_file() {
 
     local env_path="${ENV_FILE:-}"
     local env_example=".env.example"
-	local requiresDecryption=true
 
     # If no .env exists, but .env.example does exist, copy it to .env
     if [[ ! -f ".env" && -f "$env_example" ]]; then
         cp "$env_example" ".env"
         echo "ensure_env_file: copied $env_example -> .env" >&2
-		requiresDecryption=false
     fi
 
     # If no .env exists, and no .env.example exist, copy .env.example from $PORTMASON_SHARE/templates--copy it.
     if [[ ! -f ".env" && -f "$ENV_EXAMPLE_SRC" ]]; then
         cp "$ENV_EXAMPLE_SRC" ".env"
         echo "ensure_env_file: copied $ENV_EXAMPLE_SRC -> .env" >&2
-		requiresDecryption=false
     fi
 
-    # If env_path exists, allow it to define/override DEPLOY_ENV.
-	if [[ "$requiresDecryption" == true ]]; then
-		local pm_env_plaintext
-		pm_env_plaintext="$(
-			python3 "${PORTMASON_SHARE}/pm-secret.py" resolve-env "$env_path"
-		)" || die "unable to resolve environment file"
-		set -a
-		echo "evaluating the decrypted file '$env_path'"
-		eval "$pm_env_plaintext" || {
-			set +a
-			unset pm_env_plaintext
-			die "unable to load decrypted environment"
-		}
-		set +a
-		unset pm_env_plaintext
-	else
-		set -a
-		source "$env_path" || {
-			set +a
-			die "unable to source environment file '${env_path}'"
-		}
-		set +a
-	fi
-
+    # Resolve once. The quoted exports include the key inventory for serialization.
+    local pm_env_exports
+    pm_env_exports="$(python3 "${PORTMASON_SHARE}/pm-secret.py" resolve-env "$env_path")" || {
+        die "unable to resolve environment file '$env_path'"
+        return 1
+    }
+    eval "$pm_env_exports" || {
+        unset pm_env_exports
+        die "unable to load resolved environment '$env_path'"
+        return 1
+    }
+    unset pm_env_exports
 	echo "sourced ENV_FILE='$env_path'" >&2
 
     # If env file did not set DEPLOY_ENV, fall back to injected value, even when
@@ -485,25 +464,30 @@ pm_deploy_env_is_production() {
 pm_decrypt_file() {
     local pm_input_file="${1:?file required}"
     local pm_output_variable="${2:?output variable required}"
-    local pm_decrypted_content pm_input_format=dotenv
+    local pm_decrypted_content
 
-    [[ "$pm_input_file" == *.json ]] && pm_input_format=json
+    if [[ ! "$pm_output_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        printf 'ERROR: invalid output variable name: %s\n' \
+            "$pm_output_variable" >&2
+        return 2
+    fi
 
-	cipher_line_count=$(wc -l < "$pm_input_file")
-	echo "Starting file decryption on '$pm_input_file' containing $cipher_line_count lines ..."
+    case "$pm_output_variable" in
+        pm_input_file|pm_output_variable|pm_decrypted_content)
+            printf 'ERROR: output variable conflicts with reader internals: %s\n' \
+                "$pm_output_variable" >&2
+            return 2
+            ;;
+    esac
+
     pm_decrypted_content="$(
-        sops --decrypt \
-            --input-type "$pm_input_format" \
-            --output-type "$pm_input_format" \
-            "$pm_input_file"
+        python3 "${PORTMASON_SHARE:?PORTMASON_SHARE is required}/pm-secret.py" \
+            sops decrypt --stdout -- "$pm_input_file"
     )" || {
-        printf 'ERROR: unable to decrypt configuration file: %s
-' "$pm_input_file" >&2
+        printf 'ERROR: unable to read configuration file: %s\n' \
+            "$pm_input_file" >&2
         return 2
     }
-
-	plaintext_line_count=$(printf '%s\n' "$pm_decrypted_content" | wc -l)
-	echo "Successfully decrypted '$pm_input_file' with $plaintext_line_count lines. It is normal for the plaintext line count to be less than the cipher line count." >&2
 
     printf -v "$pm_output_variable" '%s' "$pm_decrypted_content"
 }
@@ -681,41 +665,8 @@ ensure_app_url() {
 #   1) ENV_FILE   — authoritative bulk config
 #   2) init vars  — explicitly registered via env_init_set
 #
-# Explicitly excluded:
-#   - Secrets (*_TOKEN, *_SECRET, *_KEY, *_PASSWORD, ENV_FILE, DEBUG, VERBOSE)
-#   - Runtime noise (PATH, HOME, etc.)
-
+# Preserve every declared project environment key.
 ENV_INIT_VARS=()
-
-ENV_EXCLUDE_GLOBS=()
-#   '*_TOKEN'
-#   '*_SECRET'
-#   '*_KEY'
-#   '*_PASSWORD'
-#   'ENV_FILE'
-#   'DB_USER'
-#   'DB_ADMIN_USER'
-#   'DB_URL'
-#   'DB_DIRECT_URL'
-#   'DEBUG'
-#   'VERBOSE'
-#   'PM_ENTRY_SCRIPT'
-#   'APP_HOST'
-#   'PATH'
-#   'HOME'
-#   'PWD'
-#   'OLDPWD'
-#   'SHELL'
-#   'SHLVL'
-#   'USER'
-#   'LOGNAME'
-#   'LANG'
-#   'LANGUAGE'
-#   'LC_*'
-#   'TERM'
-#   'XDG_*'
-#   'PORT'
-#)
 
 env_file_to_kv_nul() {
   local env_file="${1:?env file required}"
@@ -758,19 +709,6 @@ env_file_to_kv_nul() {
   )
 }
 
-env_filter_secrets() {
-  local k v pat
-  while IFS= read -r -d '' k; do
-    IFS= read -r -d '' v || v=""
-
-    for pat in "${ENV_EXCLUDE_GLOBS[@]}"; do
-      [[ "$k" == $pat ]] && continue 2
-    done
-
-    printf '%s\0%s\0' "$k" "$v"
-  done
-}
-
 env_init_set() {
   local k="${1:?key required}"
   local v="${2-}"
@@ -793,9 +731,9 @@ env_init_to_kv_nul() {
 
 env_kv_for_injection() {
   (
-    [[ -n "${ENV_FILE-}" ]] && env_file_to_kv_nul "${ENV_FILE}.generated"
+    [[ -n "${ENV_FILE-}.generated" ]] && env_file_to_kv_nul "${ENV_FILE}.generated"
     env_init_to_kv_nul
-  ) | env_filter_secrets | env_merge_first_wins
+  ) | env_merge_first_wins
 }
 
 env_merge_first_wins() {
@@ -1719,6 +1657,79 @@ log_cmd() {
   log "CMD:${out# }"
 }
 
+pm_portmason_env_args_for_service_or_role() {
+    local key value
+    while IFS= read -r -d '' key; do
+        IFS= read -r -d '' value || value=""
+        printf '%s\0%s\0' "--set-env-vars" "${key}=${value}"
+    done < <(pm_portmason_all_env_kv_nul)
+}
+
+pm_portmason_all_env_kv_nul() {
+    env_file_to_kv_nul "${ENV_FILE:?ENV_FILE required}.generated"
+}
+
+pm_portmason_resolved_runtime_env_kv_nul() {
+    local key value resource
+
+    pm_portmason_all_env_kv_nul
+
+    # while IFS= read -r -d '' key; do
+    #     IFS= read -r -d '' resource || resource=""
+    #     [[ -n "$key" && -n "$resource" ]] || continue
+    #     pm_portmason_get_secret_value value "$key" \
+    #         || die "Unable to resolve production runtime secret for local emulation: $key" 2
+    #     [[ -n "$value" ]] \
+    #         || die "Production runtime secret resolved empty for local emulation: $key" 2
+    #     printf '%s\0%s\0' "$key" "$value"
+    # done < <(pm_portmason_runtime_secret_bindings_nul)
+}
+
+# pm_portmason_env_args_for_role() {
+#     local role="${1:?service role required}"
+#     pm_portmason_env_args_for_service "$role" "$role"
+# }
+
+pm_portmason_write_env_file_for_service_or_role() {
+    local out_var="${1:?output variable required}"
+    local pm_full_env_file
+
+    pm_full_env_file="$(mktemp --suffix=.env)" || return 2
+
+    if ! (
+        set -o pipefail
+
+        pm_portmason_all_env_kv_nul |
+        python3 -c '
+import sys
+
+parts = sys.stdin.buffer.read().split(b"\0")
+
+if parts[-1:] == [b""]:
+    parts.pop()
+
+if not parts or len(parts) % 2:
+    raise SystemExit("Invalid or empty environment stream")
+
+for i in range(0, len(parts), 2):
+    key = parts[i].decode()
+    value = parts[i + 1].decode()
+    print(f"{key}={value}")
+'
+    ) > "$pm_full_env_file"; then
+        rm -f -- "$pm_full_env_file"
+        log "Failed to generate env file"
+        return 2
+    fi
+
+    printf -v "$out_var" '%s' "$pm_full_env_file"
+}
+
+# pm_portmason_write_env_file_for_role() {
+#     local out_var="${1:?output variable required}"
+#     pm_portmason_write_env_file_for_service_or_role "$out_var"
+# }
+
 pm_portmason_project_references_staged_copy() {
     local root="${REPO_ROOT:-${PROJECT_ROOT:-$(pwd -P)}}"
     local file
@@ -1819,7 +1830,6 @@ stage_portmason() {
 
     "${rsync_cmd[@]}"
 }
-
 
 resolve_project_root_candidate() {
     local invocation_dir="${1:-$(pwd -P)}"

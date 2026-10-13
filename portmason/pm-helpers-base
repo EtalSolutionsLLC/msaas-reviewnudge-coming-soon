@@ -68,11 +68,12 @@ is_valid_project_identifier() {
 }
 
 persist_kv() {
-    local key="$1"
-    local value="$2"
-    local file="${3:-${ENV_FILE}}"
+    local key="${1:?env key required}"
+    local value="${2?env value required}"
+    local file="${3:-${ENV_FILE:-}}"
+    local router="${PORTMASON_SHARE:?PORTMASON_SHARE is required}/pm-secret.py"
 
-    if [[ -z "${file}" || ! -f "${file}" ]]; then
+    if [[ -z "$file" || ! -f "$file" ]]; then
         ok "Unable to find env file (file: '${file:-}')"
         return 0
     fi
@@ -82,69 +83,76 @@ persist_kv() {
         return 2
     fi
 
+    local status=0
+    python3 "$router" sops status -- "$file" >/dev/null || status=$?
+
+    case "$status" in
+        0|1) ;;
+        *)
+            log "ERROR: unable to check encryption status: $file" >&2
+            return 2
+            ;;
+    esac
+
     local plaintext
-    plaintext="$(sops --decrypt "$file")" || {
-        log "ERROR: unable to decrypt env file: $file" >&2
+    plaintext="$(python3 "$router" sops decrypt --stdout -- "$file")" || {
+        log "ERROR: unable to read env file: $file" >&2
         return 2
     }
-    log "Successfully decrypted file $file"
 
     local esc_value
-    esc_value="$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')"
+    esc_value="$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')" || return 2
 
     if grep -q "^${key}=" <<<"$plaintext"; then
         plaintext="$(
             printf '%s\n' "$plaintext" |
-            sed -E "s|^${key}=.*$|${key}=${esc_value}|"
-        )"
+                sed -E "s|^${key}=.*$|${key}=${esc_value}|"
+        )" || return 2
     else
-        plaintext="${plaintext%$'\n'}"$'\n'"${key}=${value}"
+        plaintext="${plaintext:+${plaintext%$'\n'}$'\n'}${key}=${value}"
     fi
 
-    local plain_tmp
-    local enc_tmp
-
-    plain_tmp="$(mktemp)" || {
-        log "ERROR: unable to create plaintext temp file" >&2
+    # Stage beside the original so replacement stays on the same filesystem.
+    local output_tmp
+    output_tmp="$(mktemp -- "${file}.tmp.XXXXXX")" || {
+        log "ERROR: unable to create output temp file: $file" >&2
         return 2
     }
 
-    enc_tmp="$(mktemp)" || {
-        rm -f "$plain_tmp"
-        log "ERROR: unable to create encrypted temp file" >&2
-        return 2
-    }
-
-    chmod --reference="$file" "$enc_tmp" 2>/dev/null || true
-
-    printf '%s\n' "$plaintext" > "$plain_tmp" || {
-        rm -f "$plain_tmp" "$enc_tmp"
-        log "ERROR: unable to write plaintext temp file" >&2
-        return 2
-    }
-
-    sops \
-        --encrypt \
-        --age "$SOPS_AGE_RECIPIENTS" \
-		--filename-override "$file" \
-        --input-type dotenv \
-        --output-type dotenv \
-        "$plain_tmp" > "$enc_tmp" || {
-            rm -f "$plain_tmp" "$enc_tmp"
-            log "ERROR: unable to encrypt env file: $file" >&2
+    if [[ "$status" == 0 ]]; then
+        # Plaintext travels through stdin; only ciphertext reaches the temp file.
+        if ! printf '%s\n' "$plaintext" |
+            python3 "$router" encrypt-file "$output_tmp" --format dotenv; then
+            rm -f -- "$output_tmp"
+            log "ERROR: unable to encrypt updated env file: $file" >&2
             return 2
-        }
+        fi
+    else
+        if ! printf '%s\n' "$plaintext" > "$output_tmp"; then
+            rm -f -- "$output_tmp"
+            log "ERROR: unable to write updated env file: $file" >&2
+            return 2
+        fi
+    fi
+    unset plaintext
 
-    rm -f "$plain_tmp"
-
-    mv "$enc_tmp" "$file" || {
-        rm -f "$enc_tmp"
-        log "ERROR: unable to replace file: $file" >&2
+    if ! chmod --reference="$file" -- "$output_tmp"; then
+        rm -f -- "$output_tmp"
+        log "ERROR: unable to preserve env file permissions: $file" >&2
         return 2
-    }
+    fi
 
-    log "Successfully encrypted file $file"
+    if ! mv -f -- "$output_tmp" "$file"; then
+        rm -f -- "$output_tmp"
+        log "ERROR: unable to replace env file: $file" >&2
+        return 2
+    fi
 
+    if [[ "$status" == 0 ]]; then
+        log "Updated encrypted env file: $file"
+    else
+        log "Updated plaintext env file: $file"
+    fi
     return 0
 }
 

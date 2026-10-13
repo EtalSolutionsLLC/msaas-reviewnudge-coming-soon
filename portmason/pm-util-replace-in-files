@@ -25,6 +25,8 @@ find . -type f \
     ! -path "*/venv/*" \
     ! -path "*/dist/*" \
     ! -path "*/build/*" \
+	! -path "*/logs/*" \
+	! -path "*/capture/*" \
     -exec grep -nHI -- "$SEARCH_TERM" {} + > "$MATCH_FILE"
 
 if [[ ! -s "$MATCH_FILE" ]]; then

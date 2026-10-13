@@ -99,26 +99,6 @@ for key in "${keys[@]}"; do
     [[ -z "${emitted[$key]+x}" ]] || continue
     emitted["$key"]=1
 
-    #
-    # Portmason/operator metadata is not application configuration and must
-    # not be materialized into .env.generated.
-    #
-    case "$key" in
-        PM_*|ENV_FILE|SECRET_PATHS|DEBUG|VERBOSE|PATH|HOME|PWD|OLDPWD|SHELL|SHLVL|USER|LOGNAME|LANG|LANGUAGE|LC_*|TERM|XDG_*)
-            continue
-            ;;
-    esac
-
-    #
-    # Secret-bearing values remain managed by the secret-provider path rather
-    # than being copied into .env.generated.
-    #
-    #if declare -F pm_config_key_looks_secret >/dev/null 2>&1; then
-    #    if pm_config_key_looks_secret "$key"; then
-    #        continue
-    #    fi
-    #afi
-
     value="${!key-}"
     pm_generate_config_write_dotenv_pair "$key" "$value"
 done

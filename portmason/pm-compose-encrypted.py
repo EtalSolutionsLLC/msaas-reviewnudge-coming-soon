@@ -17,8 +17,14 @@ def memory_file(text):
 
 def decrypt(filename):
     result = subprocess.run(
-        ["sops", "--decrypt", "--input-type", "dotenv",
-         "--output-type", "dotenv", str(filename)],
+        [
+            sys.executable,
+            str(
+                Path(os.environ.get("PORTMASON_SHARE") or Path(__file__).resolve().parent)
+                / "pm-secret.py"
+            ),
+            "sops", "decrypt", "--stdout", "--", str(filename),
+        ],
         capture_output=True, text=True, timeout=60,
     )
     if result.returncode:

@@ -162,6 +162,7 @@ try "Copying project files (no redaction)…" bash -lc "
     --exclude 'state' \
     --exclude 'capture' \
     --exclude '.git' \
+    --exclude '/portmason' \
     --exclude 'node_modules' \
     --exclude 'dist' \
     --exclude 'build' \
@@ -180,27 +181,7 @@ try "Copying portmason files (no redaction)…" bash -lc "
     '$PORTMASON_SHARE/' '$PORTMASON_OUT/'
 "
 
-# -----------------------------
-# System snapshot (/usr/local/bin → sys/)
-# -----------------------------
-SYS_OUT="$RUN_DIR/usr/local/bin"
-mkdir -p "$SYS_OUT" || warn "Could not create $SYS_OUT"
-
-try "Copying real files from /usr/local/bin (no symlinks) into sys/..." bash -eu -c '
-  SYS_OUT="$1"
-
-  dir="/usr/local/bin"
-  [ -d "$dir" ] || exit 0
-
-  # Exclude cosign + cosign* from the snapshot
-  find "$dir" -maxdepth 1 -type f \
-    ! -name "cosign" \
-    ! -name "cosign*" \
-    -print0 | while IFS= read -r -d "" f; do
-      cp -fL "$f" "$SYS_OUT"/ 2>/dev/null || true
-    done
-' _ "$SYS_OUT"
-
+# Installed system tools are not bundled in source snapshots.
 
 # -----------------------------
 # Git summary (best-effort)

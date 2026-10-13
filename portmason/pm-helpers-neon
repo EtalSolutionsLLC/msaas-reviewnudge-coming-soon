@@ -313,22 +313,22 @@ pm_observability_neon_store_generated_role_password() {
         "role=$OBSERVABILITY_DB_USER"
 }
 
-pm_observabilitobservabilitobservabilitobservability_db_platform_neon_prepare_runtime() {
+pm_observability_db_platform_neon_prepare_runtime() {
     local PM_OBSERVABILITY_DB_RUNTIME_HOST=""
     local PM_OBSERVABILITY_DB_RUNTIME_PORT=""
     local PM_OBSERVABILITY_DB_RUNTIME_USER=""
     local PM_OBSERVABILITY_DB_RUNTIME_PASSWORD=""
     local PM_OBSERVABILITY_DB_RUNTIME_DATABASE=""
 
-    if [[ "${DEPLOY_ENV:-dev}" != dev \
-        && "${ADAPTER_CODE:-}" == gcp \
-        && "$(type -t pm_gcp_get_secret_value)" == function ]]; then
-        pm_gcp_get_secret_value OBSERVABILITY_DB_URL OBSERVABILITY_DB_URL \
-            || die "Unable to load managed OBSERVABILITY_DB_URL" 2
+    # if [[ "${DEPLOY_ENV:-dev}" != dev \
+    #     && "${ADAPTER_CODE:-}" == gcp \
+    #     && "$(type -t pm_gcp_get_secret_value)" == function ]]; then
+    #     pm_gcp_get_secret_value OBSERVABILITY_DB_URL OBSERVABILITY_DB_URL \
+    #         || die "Unable to load managed OBSERVABILITY_DB_URL" 2
         export OBSERVABILITY_DB_URL
-    else
-  #      pm_observability_hydrate_secret OBSERVABILITY_DB_URL
-    fi
+    #else
+#     pm_observability_hydrate_secret OBSERVABILITY_DB_URL
+#    fi
     [[ -n "${OBSERVABILITY_DB_URL:-}" ]] \
         || die "OBSERVABILITY_DB_URL is required for Neon observability runtime access" 2
 

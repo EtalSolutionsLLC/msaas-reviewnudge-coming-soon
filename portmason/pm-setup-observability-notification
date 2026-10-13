@@ -228,6 +228,8 @@ pm_setup_notification() {
     GF_SMTP_FROM_NAME="${APP_NAME:-${APP_SLUG:-${STACK}}} operations"
     export GF_SMTP_FROM_ADDRESS GF_SMTP_FROM_NAME GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
   fi
+  export GF_SMTP_ENABLED="$enabled"
+  export GF_UNIFIED_ALERTING_EXECUTE_ALERTS="$enabled"
   python3 "${PORTMASON_SHARE}/observability/grafana/render-alerting.py"
   pm_observability_local_compose up -d --no-deps --force-recreate --wait dashboard
   log INFO "Grafana alerting provisioned" "notifications=$enabled"

@@ -30,7 +30,7 @@ dashboard_payload="$(mktemp)"
 datasource_catalog="$(mktemp)"
 printf '{"uid":"%s","title":"%s"}\n' "$folder_uid" "$folder_title" > "$folder_payload"
 if ! grafana_request GET "/api/folders/${folder_uid}" >/dev/null 2>&1; then
-    grafana_request POST '/api/folder.grafana.app/v1' "$folder_payload" >/dev/null
+    grafana_request POST '/api/folders' "$folder_payload" >/dev/null
     log INFO "Grafana dashboard folder created" "uid=$folder_uid"
 fi
 

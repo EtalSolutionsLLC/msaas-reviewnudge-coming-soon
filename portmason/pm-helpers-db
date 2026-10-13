@@ -155,7 +155,7 @@ pm_db_mark_module_loaded() {
     PM_DB_LOADED_MODULES["$module_name"]=1
 }
 
-pm_db_source_module_once() {
+pm_db_source_module_once() {	
     local module_name="${1:?module name required}"
     local requirement="${2:-required}"
     local module_file=""
@@ -723,8 +723,8 @@ pm_db_publish_generated_contract() {
 	# Decrypt once. A failure leaves the original file untouched.
 	if [[ -s "$file" ]]; then
 		generated_content="$(
-			sops --decrypt \
-				--input-type dotenv --output-type dotenv "$file"
+			python3 "${PORTMASON_SHARE}/pm-secret.py" \
+				sops decrypt --stdout -- "$file"
 		)" || return 2
 	fi
 
@@ -749,9 +749,8 @@ pm_db_publish_generated_contract() {
 
 	# Only encrypted output is written to disk.
 	if ! printf '%s\n' "$generated_content" |
-		sops --encrypt \
-			--input-type dotenv --output-type dotenv \
-			--filename-override "$file" /dev/stdin >"$tmp"
+		python3 "${PORTMASON_SHARE}/pm-secret.py" \
+			encrypt-file "$tmp" --format dotenv
 	then
 		rm -f -- "$tmp"
 		unset generated_content

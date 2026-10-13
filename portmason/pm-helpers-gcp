@@ -4,7 +4,7 @@ set -euo pipefail
 : "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
 . "${PORTMASON_SHARE}/pm-helpers" "$@"
 
-. "${PORTMASON_SHARE}/pm-helpers-gcp-secrets" "$@"
+#. "${PORTMASON_SHARE}/pm-helpers-gcp-secrets" "$@"
 
 : "${REGION:=${PLATFORM_REGION:-us-central1}}"
 : "${PLATFORM_REGION:=${REGION}}"

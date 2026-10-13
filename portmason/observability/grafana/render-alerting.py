@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render native Grafana provisioning files and private SMTP environment."""
+"""Render native Grafana provisioning files."""
 import json
 import os
 from pathlib import Path
@@ -42,12 +42,4 @@ for name in ('rules.json', 'notifications.json'):
         data = {'apiVersion': 1}
     write_atomic(target / name, json.dumps(data, indent=2) + '\n', 0o644)
 
-keys = ['GF_SMTP_HOST','GF_SMTP_USER','GF_SMTP_PASSWORD','GF_SMTP_FROM_ADDRESS','GF_SMTP_FROM_NAME','GF_SMTP_STARTTLS_POLICY']
-values = {key: os.environ.get(key, '') for key in keys}
-values['GF_SMTP_ENABLED'] = str(enabled).lower()
-values['GF_UNIFIED_ALERTING_EXECUTE_ALERTS'] = str(enabled).lower()
-# Compose raw env-file format preserves dollar signs and quotes in secrets.
-if any('\n' in v or '\r' in v for v in values.values()):
-    raise SystemExit('SMTP settings must be single-line values')
-write_atomic(root / '.env.observability-notification.generated', ''.join(k+'='+v+'\n' for k,v in values.items()), 0o600)
 print('Rendered Grafana alerting; notifications ' + ('enabled' if enabled else 'disabled'))

@@ -1,18 +1,30 @@
 {
-  "APP_HOST": "reviewnudge-coming-soon-prd.etal.solutions",
-  "APP_SLUG": "reviewnudge-coming-soon",
-  "DATA_CLASS": "confidential",
-  "DATA_LIFECYCLE": "persistent",
-  "DEPLOYMENT_ID": "reviewnudge-coming--1777712786",
-  "DEPLOY_ENV": "prd",
-  "LIFECYCLE": "long-lived",
-  "LOCAL_DOMAIN": "etal.solutions",
-  "MANAGED_BY": "compose",
-  "OWNER_ALIAS": "etalsolutions",
-  "PM_SERVE_EXCLUDE_ADDTL_DIRS": "portmason",
-  "PROJECT_ID": "reviewnudge-coming--1777712786",
-  "RUNTIME_ADAPTER_CODE": "static-github",
-  "STACK": "reviewnudge-coming-soon-prd",
-  "URI_SCHEME": "https",
-  "WP_SITE_URL": "https://reviewnudge-coming-soon-prd.etal.solutions"
+	"APP_SLUG": "ENC[AES256_GCM,data:97DiSiojsDqK68AXHySsXCBpbHOmlHE=,iv:RgjEN7oxKt6o+RCZsOJx+yhzPI6HikSXK442bbyH0Ig=,tag:vGmm1pMbHrkAd8HTgUywaA==,type:str]",
+	"DEPLOY_ENV": "ENC[AES256_GCM,data:1jev,iv:3CSXWalbp7Uu6TeM+JWfFF0fbtbI3qT5ZAWNhH/0xBY=,tag:1lzoB/HINkqemxrBE1UA1A==,type:str]",
+	"RUNTIME_ADAPTER_CODE": "ENC[AES256_GCM,data:DRW3cHeHyBMd/Low8A==,iv:hEiMy2eSX8XLBNcJQFnL3i5rn6g2fU0PDJBhadvFUk8=,tag:EH1DdWxEkxB9xLRCOn7qBA==,type:str]",
+	"LOCAL_DOMAIN": "ENC[AES256_GCM,data:QwLZuyO+9NZ+Xkc+w1A=,iv:BIfKER6sTce9XBya+lUyIt3rrHpeWpX1vCA6S6A1xR8=,tag:MtNM7BdglkD9u8ZmLcSPLQ==,type:str]",
+	"STACK": "ENC[AES256_GCM,data:EjjSL2KR14VHjXJG/HdB+xcyXCMc/yJmrhIz,iv:fsXztYyopbA84HttURkzDqb/TZii/9Rw+HwfiefYyho=,tag:kkR72cVtA21wBSSIzJJktg==,type:str]",
+	"APP_HOST": "ENC[AES256_GCM,data:oQGI8ZPOd9AqTYUPbhhesvUS07OP5BsG+cpCLXWqHV1tVliHEynjnDs4,iv:qQYzRNBDu2RJsgxMT8Ci6qoeZ+VkrskqWAEfXSSjc7I=,tag:P+hjZG83zeLxvlXMlNubCg==,type:str]",
+	"URI_SCHEME": "ENC[AES256_GCM,data:JQiCAUA=,iv:X4N9lLNaQuprkQ/ksbujDeILwioyXq6GkVVXJcpXQiA=,tag:Ke2sdBt3zHJe5pAGhQErCQ==,type:str]",
+	"WP_SITE_URL": "ENC[AES256_GCM,data:h3WL0c9I7c/d4G/QOLfIFY4IABRpQiWpb2omApiNz4k21Wf5jChD8rjl82p9s7sU9Hw=,iv:o84gGeGwanIojEbUCCd0KXpXzoUgAbTC85WXHCNPFC0=,tag:5wyb/dE0yUF7KC77OsOJvg==,type:str]",
+	"PM_SERVE_EXCLUDE_ADDTL_DIRS": "ENC[AES256_GCM,data:n0VtEAyx4yK+,iv:ZuGaIVrBQLb4XpAh9yjUMEQ8APwnR0dwbGIGmpQWD+I=,tag:5SoE1dzcyBm2MsKu1/JQPg==,type:str]",
+	"OWNER_ALIAS": "ENC[AES256_GCM,data:vHXRont98F2Bj0xLuA==,iv:tNwYFvfUX81UYXOmto6T6MAaBJ4BbfBAibYhZo2+RdA=,tag:r7O9s7ixpGp1u/K95MzIsg==,type:str]",
+	"MANAGED_BY": "ENC[AES256_GCM,data:JxjUmcYDsQ==,iv:8mZfYySal1yI3csAo+Tt4iYj+AFNFL+ev6gjq54Pvug=,tag:Up1amhB9EDVuEVJ0zCh+0w==,type:str]",
+	"LIFECYCLE": "ENC[AES256_GCM,data:vjjoX1xQCvMhvQ==,iv:AREaie+GQFzRHZb2/lzHJBhBXtnLv3+ED49ZwbNUe3s=,tag:lcoXJMvpNPd0Pu3vVNt1EA==,type:str]",
+	"DATA_CLASS": "ENC[AES256_GCM,data:M61y+nlMkCtb6wx9,iv:Dw8j0a7xqR/H6pYHWOL0navynyeP61MufKrthyOffVo=,tag:4p/u9xId5t3iR4D8SdRRxw==,type:str]",
+	"DATA_LIFECYCLE": "ENC[AES256_GCM,data:8zIKlVq7psVZhQ==,iv:NkyT1FQNOfDLvFxyGOIdLAOom5tclZsSJp1mDY7SpUQ=,tag:j+7JXZu3g+E/cNkm06pjbw==,type:str]",
+	"PROJECT_ID": "ENC[AES256_GCM,data:cjQckqXZykywiVfsU6Igg5tlVVbsezYUTLcl0wZw,iv:Pl/81RqsaMk8ACtRChqYpt/gg2dJr8E8w/0zNkjfu6M=,tag:OfXhxm6TEuDyK93DfQOSew==,type:str]",
+	"DEPLOYMENT_ID": "ENC[AES256_GCM,data:nUa0u7l4DZiCMDqEEkKaaYlVRaCOs6pHv87/A7QP,iv:SqQoadbgT8yrJVPsWpR9KXWh2seZHaej/ruQGlz/h8g=,tag:O/DkPCj6ttWcqfZ31J3PxQ==,type:str]",
+	"sops": {
+		"age": [
+			{
+				"enc": "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBxdXhERjRnbXhLVWdERERo\nMTR5d09kaXVmWXpHc1pQSlIvWjZ3Um4wRVQ4CnZxL3B1T3hIL2JNSC9yam9yZnpF\nR3Y5MmRLOGFobDJmNWhORjVZWER4UXMKLS0tIFl3SkdmZFR2WkpqbnY2d0l3VTVD\nWGVzS2V2MnlZVWZpcGVOWHRha0dDbmsKqDom4GHfErvWMR+ZOi3IjjXBVa/xQLu4\nmZ5sTrvMNf3TOAbvDcJISfZRDnYeKN9o306Pk4/IRcWerfISxvUFBw==\n-----END AGE ENCRYPTED FILE-----\n",
+				"recipient": "age1zxddpnaexu6uu7tcj9k7rtwkvhfx7en8vsnyax4udmw0v8gxzypqxy309e"
+			}
+		],
+		"lastmodified": "2026-10-13T01:32:15Z",
+		"mac": "ENC[AES256_GCM,data:zjmCL8RD9XsfwmRjCHmXWASIzg1guxTpyClJbp45FaDaIW0ts31thgkLzIXQuzwSZy6l01lklG8p0u0hCBHa+4m3RSvRYKWyjo2h6N4n1Gl/fkjiW8idYu+X7RquuR6sgLb7zwuOmrB3UQGQ15FYpdgEAkvG5ZeREIYjyGl71TE=,iv:T+SXiIi8pHrWzQCdhqf5sajy7FzEdAePN3zN9HYsSkM=,tag:4UCTYEReZ5Yvo4n2zcC2dg==,type:str]",
+		"unencrypted_suffix": "_unencrypted",
+		"version": "3.13.3"
+	}
 }
