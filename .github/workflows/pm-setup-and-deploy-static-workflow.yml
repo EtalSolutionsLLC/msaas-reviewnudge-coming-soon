@@ -1,4 +1,4 @@
-name: setup-maintain-deploy-via-portmason
+name: pm-setup-and-deploy-static-workflow
 
 on:
   workflow_dispatch:
