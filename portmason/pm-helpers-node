@@ -1,0 +1,695 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+. "${PORTMASON_SHARE}/pm-helpers-web"
+
+
+pm_node_public_root() {
+    local resolved="${SITE_ROOT:-${SITE_DIR:-${PROJECT_ROOT:-$PWD}/public}}"
+
+    if [[ -d "${PROJECT_ROOT:-$PWD}/public" ]]; then
+        resolved="${PROJECT_ROOT:-$PWD}/public"
+    fi
+
+    printf '%s\n' "$resolved"
+}
+
+
+pm_node_content_root() {
+    printf '%s\n' \
+        "${PROJECT_ROOT:-$PWD}/content"
+}
+
+
+pm_node_has_localized_public_site() {
+    local site_root
+    local content_root
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    content_root="$(
+        pm_node_content_root
+    )"
+
+    [[ -f "${site_root}/site.template.html" ]] \
+        && [[ -f "${content_root}/locales.json" ]] \
+        && [[ -d "${content_root}/en-US" ]]
+}
+
+
+pm_node_localized_index_generation() {
+    local site_root
+    local content_root
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    content_root="$(
+        pm_node_content_root
+    )"
+
+    python3 - \
+        "$site_root" \
+        "$content_root" <<'PY'
+from pathlib import Path
+import json
+import re
+import shutil
+import sys
+
+
+public = Path(
+    sys.argv[1]
+).resolve()
+
+content_root = Path(
+    sys.argv[2]
+).resolve()
+
+locale_definitions = json.loads(
+    (
+        content_root
+        / "locales.json"
+    ).read_text(
+        encoding="utf-8"
+    )
+)
+
+template = (
+    public
+    / "site.template.html"
+).read_text(
+    encoding="utf-8"
+)
+
+copy_re = re.compile(
+    r"\[\[copy:"
+    r"([A-Za-z0-9_.-]+)"
+    r"\]\]"
+)
+
+
+def load_catalog(locale):
+
+    catalog = {}
+
+    directory = (
+        content_root
+        / locale
+    )
+
+    for path in sorted(
+        directory.glob("*.json")
+    ):
+        catalog[path.stem] = (
+            json.loads(
+                path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+
+    if not catalog:
+        raise SystemExit(
+            "No content catalogs "
+            f"found in {directory}"
+        )
+
+    return catalog
+
+
+def lookup(
+    catalog,
+    key,
+):
+
+    value = catalog
+
+    for segment in key.split("."):
+
+        if (
+            not isinstance(
+                value,
+                dict,
+            )
+            or segment not in value
+        ):
+            raise SystemExit(
+                f"Missing content key: "
+                f"{key}"
+            )
+
+        value = value[segment]
+
+    if not isinstance(
+        value,
+        (
+            str,
+            int,
+            float,
+        ),
+    ):
+        raise SystemExit(
+            "Content key is "
+            "not a scalar: "
+            f"{key}"
+        )
+
+    return str(value)
+
+
+localized_root = (
+    public
+    / "locales"
+)
+
+if localized_root.exists():
+    shutil.rmtree(
+        localized_root
+    )
+
+localized_root.mkdir(
+    parents=True
+)
+
+
+for definition in (
+    locale_definitions
+):
+
+    locale = (
+        definition["locale"]
+    )
+
+    catalog = load_catalog(
+        locale
+    )
+
+    output = copy_re.sub(
+        lambda match: lookup(
+            catalog,
+            match.group(1),
+        ),
+        template,
+    )
+
+    output = re.sub(
+        r'<html\s+lang="en"',
+        (
+            f'<html lang="{locale}" '
+            f'dir="'
+            f'{definition["direction"]}'
+            f'" '
+            f'data-locale="{locale}"'
+        ),
+        output,
+        count=1,
+    )
+
+    unresolved = sorted(
+        set(
+            copy_re.findall(
+                output
+            )
+        )
+    )
+
+    if unresolved:
+        raise SystemExit(
+            f"{locale} unresolved "
+            "content keys: "
+            + ", ".join(
+                unresolved
+            )
+        )
+
+    if locale == "en-US":
+        index = (
+            public
+            / "index.html"
+        )
+    else:
+        index = (
+            localized_root
+            / locale
+            / "index.html"
+        )
+
+    index.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    index.write_text(
+        output,
+        encoding="utf-8",
+    )
+
+    index.chmod(
+        0o644
+    )
+
+    print(
+        f"Generated {index}"
+    )
+PY
+}
+
+
+pm_node_localized_catalog_generation() {
+    local site_root
+    local content_root
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    content_root="$(
+        pm_node_content_root
+    )"
+
+    python3 - \
+        "$site_root" \
+        "$content_root" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+
+public = Path(
+    sys.argv[1]
+).resolve()
+
+content_root = Path(
+    sys.argv[2]
+).resolve()
+
+locale_definitions = json.loads(
+    (
+        content_root
+        / "locales.json"
+    ).read_text(
+        encoding="utf-8"
+    )
+)
+
+localized_root = (
+    public
+    / "locales"
+)
+
+localized_root.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+
+for definition in (
+    locale_definitions
+):
+
+    locale = (
+        definition["locale"]
+    )
+
+    catalog = {}
+
+    directory = (
+        content_root
+        / locale
+    )
+
+    for path in sorted(
+        directory.glob("*.json")
+    ):
+        catalog[path.stem] = (
+            json.loads(
+                path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+
+    if not catalog:
+        raise SystemExit(
+            "No content catalogs "
+            f"found in {directory}"
+        )
+
+    target = (
+        localized_root
+        / f"{locale}.json"
+    )
+
+    target.write_text(
+        json.dumps(
+            catalog,
+            ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+    target.chmod(
+        0o644
+    )
+
+    print(
+        f"Generated {target}"
+    )
+PY
+}
+
+
+pm_node_browser_content_module_generation() {
+    local site_root
+    local content_root
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    content_root="$(
+        pm_node_content_root
+    )"
+
+    python3 - \
+        "$site_root" \
+        "$content_root" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+
+public = Path(
+    sys.argv[1]
+).resolve()
+
+content_root = Path(
+    sys.argv[2]
+).resolve()
+
+baseline = {}
+
+for path in sorted(
+    (
+        content_root
+        / "en-US"
+    ).glob("*.json")
+):
+    baseline[path.stem] = (
+        json.loads(
+            path.read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+
+if not baseline:
+    raise SystemExit(
+        "No baseline content "
+        "catalogs found in "
+        f"{content_root / 'en-US'}"
+    )
+
+
+browser_module = (
+    public
+    / "content.generated.js"
+)
+
+browser_module.write_text(
+    (
+        "/* Generated by "
+        "Portmason "
+        "pm-helpers-node. "
+        "Edit "
+        "content/<locale>/*.json "
+        "instead. */\n"
+    )
+    + (
+        "const fallbackCatalog = "
+        "Object.freeze("
+    )
+    + json.dumps(
+        baseline,
+        ensure_ascii=False,
+        separators=(
+            ",",
+            ":",
+        ),
+    )
+    + ");\n"
+    + (
+        "const requestedLocale = "
+        "typeof document === "
+        "'undefined' ? 'en-US' : "
+        "(document.documentElement.lang "
+        "|| 'en-US');\n"
+    )
+    + (
+        "let resolvedLocale = "
+        "requestedLocale;\n"
+    )
+    + (
+        "let resolvedCatalog = "
+        "fallbackCatalog;\n"
+    )
+    + (
+        "if (requestedLocale !== "
+        "'en-US' && "
+        "typeof fetch === 'function') "
+        "{ try { "
+        "const response = await "
+        "fetch(`/locales/"
+        "${encodeURIComponent("
+        "requestedLocale)}.json`, "
+        "{ headers: { "
+        "Accept: "
+        "'application/json' } }); "
+        "if (!response.ok) "
+        "throw new Error("
+        "`Locale catalog "
+        "${response.status}`); "
+        "resolvedCatalog = "
+        "await response.json(); "
+        "} catch { "
+        "resolvedLocale = 'en-US'; "
+        "} }\n"
+    )
+    + (
+        "export const locale = "
+        "resolvedLocale;\n"
+    )
+    + (
+        "export const catalog = "
+        "Object.freeze("
+        "resolvedCatalog);\n"
+    )
+    + (
+        "export function "
+        "contentValue(key) { "
+        "const value = "
+        "String(key || '').split('.')"
+        ".reduce((current, segment) => "
+        "current?.[segment], catalog); "
+        "if (typeof value === 'string' "
+        "|| typeof value === 'number') "
+        "return String(value); "
+        "throw new Error("
+        "`Missing content key: "
+        "${key}`); }\n"
+    )
+    + (
+        "export function "
+        "formatContent("
+        "value, variables = {}) { "
+        "return String(value ?? '')"
+        ".replace("
+        "/(^|[^\\{])"
+        "\\{([A-Za-z0-9_]+)"
+        "\\}(?!\\})/g, "
+        "(match, prefix, key) => "
+        "Object.prototype.hasOwnProperty"
+        ".call(variables, key) ? "
+        "`${prefix}"
+        "${variables[key] ?? ''}` "
+        ": match); }\n"
+    )
+    + (
+        "export function "
+        "copy(key, variables = {}) { "
+        "return formatContent("
+        "contentValue(key), variables); "
+        "}\n"
+    ),
+    encoding="utf-8",
+)
+
+browser_module.chmod(
+    0o644
+)
+
+print(
+    f"Generated {browser_module}"
+)
+PY
+}
+
+
+pm_node_verify_localized_outputs() {
+    local site_root
+    local content_root
+
+    pm_node_has_localized_public_site || return 0
+
+    site_root="$(pm_node_public_root)"
+    content_root="$(pm_node_content_root)"
+
+    python3 - "$site_root" "$content_root" <<'PY'
+from pathlib import Path
+import json
+import re
+import sys
+
+public = Path(sys.argv[1]).resolve()
+content_root = Path(sys.argv[2]).resolve()
+locales = json.loads((content_root / "locales.json").read_text(encoding="utf-8"))
+copy_re = re.compile(r"\[\[copy:[A-Za-z0-9_.-]+\]\]")
+
+errors = []
+for definition in locales:
+    locale = definition["locale"]
+    path = public / "index.html" if locale == "en-US" else public / "locales" / locale / "index.html"
+    if not path.is_file():
+        errors.append(f"{locale}: missing {path}")
+        continue
+    text = path.read_text(encoding="utf-8")
+    unresolved = sorted(set(copy_re.findall(text)))
+    if unresolved:
+        errors.append(f"{locale}: unresolved copy tokens: {', '.join(unresolved)}")
+
+if errors:
+    raise SystemExit("Localized public output verification failed:\n" + "\n".join(errors))
+
+print(f"Verified {len(locales)} localized public index(es)")
+PY
+}
+
+pm_runtime_verify_build_inputs() {
+    pm_node_verify_localized_outputs
+}
+
+pm_node_stale_generated_asset_cleanup() {
+    local site_root
+    local asset
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    for asset in \
+        ${PM_NODE_STALE_GENERATED_ASSETS:-}
+    do
+
+        [[ -n "$asset" ]] \
+            || continue
+
+        case "$asset" in
+            /*|*'..'*)
+                die \
+                    "Unsafe PM_NODE_STALE_GENERATED_ASSETS entry: $asset" \
+                    2
+                ;;
+        esac
+
+        if [[ -e "${site_root}/${asset}" ]]; then
+
+            rm -f -- \
+                "${site_root}/${asset}"
+
+            log INFO \
+                "removed stale generated Node asset" \
+                "asset=$asset"
+        fi
+    done
+}
+
+
+pm_node_stale_generated_route_cleanup() {
+    local site_root
+    local route
+
+    site_root="$(
+        pm_node_public_root
+    )"
+
+    for route in \
+        ${PM_NODE_STALE_GENERATED_ROUTES:-}
+    do
+
+        [[ -n "$route" ]] \
+            || continue
+
+        case "$route" in
+            /*|*'..'*)
+                die \
+                    "Unsafe PM_NODE_STALE_GENERATED_ROUTES entry: $route" \
+                    2
+                ;;
+        esac
+
+        if [[ -d "${site_root}/${route}" ]]; then
+
+            rm -rf -- \
+                "${site_root:?}/${route}"
+
+            log INFO \
+                "removed stale generated Node route" \
+                "route=$route"
+        fi
+    done
+}
+
+
+pm_node_deploy_public_site() {
+
+    if ! pm_node_has_localized_public_site; then
+
+        log INFO \
+            "pm-helpers-node: localized public site inputs not present; generation skipped"
+
+        return 0
+    fi
+
+    log INFO \
+        "pm-helpers-node: generating localized public indexes"
+
+    pm_node_localized_index_generation
+
+    log INFO \
+        "pm-helpers-node: generating localized browser catalogs"
+
+    pm_node_localized_catalog_generation
+
+    log INFO \
+        "pm-helpers-node: generating browser content module"
+
+    pm_node_browser_content_module_generation
+
+    pm_node_verify_localized_outputs
+
+    pm_node_stale_generated_asset_cleanup
+
+    pm_node_stale_generated_route_cleanup
+
+    log INFO \
+        "pm-helpers-node: localized public site ready"
+}

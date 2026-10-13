@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 NEW_FOLDER_NAME" >&2
+  exit 1
+fi
+
+target="$(realpath -m "${1:-}")"
+
+log "Target Dir: ${target}"
+log "Source Dir: $(pwd)"
+
+if [[ "${target}" == "$(pwd)" ]]; then
+   log "Target directory and current directory are the same. Proceeding with new project initialization in the current directory."
+else
+  # Create the target directory if it doesn't exist
+  mkdir -p "$target"
+  # Copy everything from current dir to target, excluding ID/timestamp files
+  rsync -a \
+    --exclude='.project_uuid' \
+    --exclude='.project_timestamp' \
+    ./ "$target/"
+fi
+
+# Write the new .project_timestamp in the target folder
+write_project_timestamp "${target}"
+#printf '%s\n' "$ts" > "$target/.project_timestamp"
+
+example_name=".env.example"
+
+if [[ -e "${target%/}/.env" || -e "${target%/}/${example_name}" ]]; then
+    log "NOOP, .env or .env.example already exists"
+else
+    log "No env/example files found, priming default..."
+
+    script_dir="$(
+        cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+        pwd -P
+    )"
+
+    cp \
+        "${script_dir}/templates/${example_name}" \
+        "${target%/}/${example_name}"
+fi
+
+
+
+# env_wildcard="*.env"
+# example_name=".env.example"
+# example_wildcard="*${example_name}"
+
+# env_wildcard="${target%/}/*.env"
+# example_name=".env.example"
+# example_wildcard="${target%/}/*${example_name}"
+
+# if compgen -G "${env_wildcard}" > /dev/null || compgen -G "${example_wildcard}" > /dev/null; then
+#     # At least one matching file exists → do nothing
+#     log "NOOP, at least one file exists matching .env or .env.example"
+# else
+#     # No *.env and no *.example files exist so we'll copy the default .env.example
+#     log "No env/example files found, priming default..."
+#     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+#     cp "${script_dir}/templates/${example_name}" "${target}"
+# fi

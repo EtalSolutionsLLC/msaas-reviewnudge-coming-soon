@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+observability_grafana_translate_report_schedule() {
+  local expression="${1:?cron expression required}"
+  local minute hour day_of_month month day_of_week
+  read -r minute hour day_of_month month day_of_week <<<"$expression"
+
+  [[ "$minute" =~ ^([0-5]?[0-9])$ && "$hour" =~ ^([01]?[0-9]|2[0-3])$ \
+      && "$day_of_month" == "*" && "$month" == "*" \
+      && "$day_of_week" =~ ^[0-6]$ ]] \
+    || die "Grafana digest currently supports one weekly HH:MM cron schedule" 2
+
+  OBSERVABILITY_DIGEST_GRAFANA_FREQUENCY=weekly
+  OBSERVABILITY_DIGEST_GRAFANA_HOUR="$hour"
+  OBSERVABILITY_DIGEST_GRAFANA_MINUTE="$minute"
+  OBSERVABILITY_DIGEST_GRAFANA_DAY_OF_WEEK="$day_of_week"
+  export OBSERVABILITY_DIGEST_GRAFANA_FREQUENCY OBSERVABILITY_DIGEST_GRAFANA_HOUR
+  export OBSERVABILITY_DIGEST_GRAFANA_MINUTE OBSERVABILITY_DIGEST_GRAFANA_DAY_OF_WEEK
+}
+
+: "${OBSERVABILITY_DIGEST_REPORT_NAME:?OBSERVABILITY_DIGEST_REPORT_NAME required}"
+: "${OBSERVABILITY_DIGEST_DASHBOARD_UID:?OBSERVABILITY_DIGEST_DASHBOARD_UID required}"
+: "${OBSERVABILITY_DIGEST_DELIVERY_ADDRESS:?OBSERVABILITY_DIGEST_DELIVERY_ADDRESS required}"
+: "${OBSERVABILITY_DIGEST_DELIVERY_SCHEDULE:?OBSERVABILITY_DIGEST_DELIVERY_SCHEDULE required}"
+: "${OBSERVABILITY_DIGEST_TIME_ZONE:?OBSERVABILITY_DIGEST_TIME_ZONE required}"
+observability_validate_email "$OBSERVABILITY_DIGEST_DELIVERY_ADDRESS"
+observability_validate_cron5 "$OBSERVABILITY_DIGEST_DELIVERY_SCHEDULE"
+observability_grafana_translate_report_schedule "$OBSERVABILITY_DIGEST_DELIVERY_SCHEDULE"
+log INFO "Grafana digest definition ready" \
+    "report=${OBSERVABILITY_DIGEST_REPORT_NAME}" \
+    "dashboard=${OBSERVABILITY_DIGEST_DASHBOARD_UID}" \
+    "schedule=${OBSERVABILITY_DIGEST_DELIVERY_SCHEDULE}" \
+    "timezone=${OBSERVABILITY_DIGEST_TIME_ZONE}"

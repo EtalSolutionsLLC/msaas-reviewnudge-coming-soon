@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Build browser-readable indexes for filesystem publication collections."""
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import os
+import re
+import tempfile
+from pathlib import Path
+from urllib.parse import quote
+
+ITEM_DIR = re.compile(r"^[0-9]{3}$")
+ITEM_REFERENCE = re.compile(r"^[0-9]{3}$")
+MD_FIELDS = ("title_md", "excerpt_md", "full_article_md")
+RESERVED_META_FIELDS = {"id", *MD_FIELDS, "title", "summary", "body", "excerpt", "full_article"}
+INLINE_TOKEN = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))")
+
+
+def load_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def atomic_write(path: Path, content: str) -> bool:
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        path.chmod(0o644)
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            os.fchmod(handle.fileno(), 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return True
+
+
+def collection_prefix(manifest: dict[str, object]) -> str:
+    labels = manifest.get("labels")
+    if isinstance(labels, dict):
+        value = labels.get("itemPrefix")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    parts = re.split(r"[^A-Za-z0-9]+", str(manifest.get("id") or "item"))
+    return ("".join(part[0] for part in parts if part) or "item").upper()
+
+
+def safe_href(value: object) -> str | None:
+    href = str(value or "").strip()
+    return href if href.lower().startswith(("https://", "http://", "mailto:", "/", "#")) else None
+
+
+def plain_markdown(value: str) -> str:
+    text = re.sub(r"`([^`]+)`", r"\1", value)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def render_inline_markdown(value: str) -> str:
+    text = " ".join(value.strip().splitlines())
+    output: list[str] = []
+    cursor = 0
+    for match in INLINE_TOKEN.finditer(text):
+        output.append(html.escape(text[cursor:match.start()]))
+        token = match.group(0)
+        if token.startswith("`"):
+            output.append(f"<code>{html.escape(token[1:-1])}</code>")
+        elif token.startswith("**"):
+            output.append(f"<strong>{html.escape(token[2:-2])}</strong>")
+        elif token.startswith("*"):
+            output.append(f"<em>{html.escape(token[1:-1])}</em>")
+        else:
+            link = re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", token)
+            if not link:
+                output.append(html.escape(token))
+            else:
+                label, raw_href = link.groups()
+                href = safe_href(raw_href)
+                output.append(
+                    f'<a href="{html.escape(href, quote=True)}">{html.escape(label)}</a>'
+                    if href else html.escape(label)
+                )
+        cursor = match.end()
+    output.append(html.escape(text[cursor:]))
+    return "".join(output)
+
+
+def read_markdown(collection_dir: Path, reference: str) -> str:
+    candidate = (collection_dir / reference).resolve()
+    try:
+        candidate.relative_to(collection_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Markdown reference escapes collection: {reference}") from exc
+    if not candidate.is_file():
+        raise ValueError(f"Publication Markdown does not exist: {candidate}")
+    value = candidate.read_text(encoding="utf-8").strip()
+    if not value:
+        raise ValueError(f"Publication Markdown is empty: {candidate}")
+    return value
+
+
+def item_url(manifest: dict[str, object], item: dict[str, object], title: str) -> str:
+    for key in ("url", "href"):
+        href = safe_href(item.get(key))
+        if href:
+            return href
+    action = item.get("primaryAction")
+    if isinstance(action, dict):
+        href = safe_href(action.get("href"))
+        if href:
+            return href
+    request = manifest.get("request")
+    if isinstance(request, dict) and isinstance(request.get("email"), str) and request["email"].strip():
+        values = {
+            "prefix": collection_prefix(manifest),
+            "id": f"{int(item['id']):03d}",
+            "title": title,
+            "collection": str(manifest.get("id") or ""),
+        }
+        subject = str(request.get("subject") or "{prefix}-{id}: {title}").format(**values)
+        body = str(request.get("body") or "Please send {prefix}-{id}: {title}").format(**values)
+        return f"mailto:{request['email'].strip()}?subject={quote(subject)}&body={quote(body)}"
+    return safe_href(manifest.get("sectionHref")) or f"/#{manifest.get('id') or 'publication'}"
+
+
+def discover_items(collection_file: Path, manifest: dict[str, object]) -> list[dict[str, object]]:
+    collection_dir = collection_file.parent
+    items_root = collection_dir / "items"
+    if not items_root.is_dir():
+        raise ValueError(f"Publication items directory does not exist: {items_root}")
+    items: list[dict[str, object]] = []
+    for item_dir in sorted(path for path in items_root.iterdir() if path.is_dir()):
+        if not ITEM_DIR.fullmatch(item_dir.name):
+            raise ValueError(f"Publication item directory must use a three-digit id: {item_dir.name}")
+        meta_file = item_dir / "meta.json"
+        meta = load_json(meta_file)
+        if not isinstance(meta, dict):
+            raise ValueError(f"Publication metadata must be an object: {meta_file}")
+        reserved = sorted(RESERVED_META_FIELDS.intersection(meta))
+        if reserved:
+            raise ValueError(f"Publication metadata contains derived fields ({', '.join(reserved)}): {meta_file}")
+        item_id = int(item_dir.name)
+        dependencies = meta.get("displayAfter", [])
+        if not isinstance(dependencies, list) or any(
+            not isinstance(value, str) or not ITEM_REFERENCE.fullmatch(value) for value in dependencies
+        ):
+            raise ValueError(f"Publication item {item_dir.name} displayAfter must contain three-digit ids")
+        relative_dir = item_dir.relative_to(collection_dir).as_posix()
+        item = {
+            **meta,
+            "id": item_id,
+            "slug": str(meta.get("slug") or f"{collection_prefix(manifest).lower()}-{item_id:03d}"),
+            "title_md": f"{relative_dir}/title.md",
+            "excerpt_md": f"{relative_dir}/excerpt.md",
+            "full_article_md": f"{relative_dir}/full-article.md",
+        }
+        title_source = read_markdown(collection_dir, item["title_md"])
+        excerpt_source = read_markdown(collection_dir, item["excerpt_md"])
+        read_markdown(collection_dir, item["full_article_md"])
+        title = plain_markdown(title_source)
+        item.update({
+            "title": title,
+            "title_html": render_inline_markdown(title_source),
+            "excerpt": plain_markdown(excerpt_source),
+            "excerpt_html": render_inline_markdown(excerpt_source),
+            "url": item_url(manifest, item, title),
+        })
+        items.append(item)
+    if not items:
+        raise ValueError(f"Publication collection is empty: {collection_file}")
+    return items
+
+
+def index_collection(collection_file: Path) -> Path:
+    manifest = load_json(collection_file)
+    if not isinstance(manifest, dict) or manifest.get("mode") != "publication":
+        raise ValueError(f"Collection is not a publication collection: {collection_file}")
+    data_file = str(manifest.get("dataFile") or "items/index.json")
+    output = (collection_file.parent / data_file).resolve()
+    try:
+        output.relative_to(collection_file.parent.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Publication dataFile escapes collection: {data_file}") from exc
+    atomic_write(output, json.dumps(discover_items(collection_file, manifest), indent=2, ensure_ascii=False) + "\n")
+    return output
+
+
+def collection_paths(site_dir: Path, explicit: Path | None) -> list[Path]:
+    if explicit:
+        return [explicit.resolve()]
+    root = site_dir / "collections"
+    if not root.is_dir():
+        return []
+    paths: list[Path] = []
+    for directory in sorted(path for path in root.iterdir() if path.is_dir() and path.name != "_system"):
+        collection_file = directory / "collection.json"
+        if collection_file.is_file():
+            manifest = load_json(collection_file)
+            if isinstance(manifest, dict) and manifest.get("mode") == "publication":
+                paths.append(collection_file)
+    return paths
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--site-dir", type=Path, default=Path(os.environ.get("SITE_DIR", os.getcwd())))
+    parser.add_argument("--collection", type=Path)
+    args = parser.parse_args()
+    site_dir = args.site_dir.resolve()
+    paths = collection_paths(site_dir, args.collection)
+    for collection_file in paths:
+        output = index_collection(collection_file)
+        try:
+            label = output.relative_to(site_dir)
+        except ValueError:
+            label = output
+        print(f"Updated {label}")
+    if not paths:
+        print(f"No publication collections to index under {site_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

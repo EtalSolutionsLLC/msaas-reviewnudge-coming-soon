@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
+export CUR_SCRIPT
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+# shellcheck source=/dev/null
+. "${PORTMASON_SHARE}/pm-helpers"
+
+# ------------------------------
+# Helpers
+# ------------------------------
+
+mask_value() {
+  local s="${1-}"
+  local n="${#s}"
+  if (( n <= 6 )); then
+    printf '******'
+    return 0
+  fi
+  printf '%s******%s' "${s:0:2}" "${s: -2}"
+}
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Missing required command: $cmd"
+}
+
+print_title() {
+  echo
+  echo "================================================================================"
+  echo "$*"
+  echo "================================================================================"
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  ${CUR_SCRIPT} --image-tag <name> --port <port> [--env-file <path>] [--cloudrun-args "<args>"] [--docker-user <uid:gid>]
+
+Defaults:
+  --image-tag     pm-cloudrun-emulator
+  --port          8080
+  --env-file      .env
+  --docker-user   1000:1000
+
+Notes:
+  - This script builds a local image and runs it in a way that resembles Cloud Run:
+    * read-only filesystem
+    * writable /tmp via tmpfs
+    * uses PORT env (default 8080)
+    * injects env vars from an env file
+USAGE
+}
+
+# Build env inject args for docker run
+build_env_inject_args() {
+  local env_file="$1"
+  local key value
+  ENV_INJECT_ARGS=()
+  ENV_INJECT_KEYS=()
+  [[ -f "$env_file" ]] || die "Env file not found: $env_file" 2
+  [[ -r "${env_file}.generated" ]] \
+    || die "Generated production runtime environment not found: ${env_file}.generated" 2
+
+  ENV_FILE="$env_file"
+  export ENV_FILE
+  # shellcheck source=/dev/null
+  . "${PORTMASON_SHARE}/pm-helpers-gcp-secrets"
+
+  while IFS= read -r -d '' key; do
+    IFS= read -r -d '' value || value=""
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+      || die "Invalid production runtime environment key: $key" 2
+    printf -v "$key" '%s' "$value"
+    export "$key"
+    # Docker inherits the value from this process. Keeping the value out of the
+    # argument prevents secrets from appearing in the process command line.
+    ENV_INJECT_ARGS+=( -e "$key" )
+    ENV_INJECT_KEYS+=( "$key" )
+  done < <(pm_gcp_resolved_runtime_env_kv_nul)
+}
+
+# ------------------------------
+# Main
+# ------------------------------
+
+IMAGE_TAG="pm-cloudrun-emulator"
+PORT="8080"
+ENV_FILE=".env"
+CLOUDRUN_ARGS=""
+DOCKER_USER="1000:1000"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --image-tag)
+      IMAGE_TAG="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --env-file)
+      ENV_FILE="$2"
+      shift 2
+      ;;
+    --cloudrun-args)
+      CLOUDRUN_ARGS="$2"
+      shift 2
+      ;;
+    --docker-user)
+      DOCKER_USER="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+require_cmd docker
+
+print_title "Cloud Run emulation: build + run locally"
+
+echo "Image tag   : ${IMAGE_TAG}"
+echo "Port        : ${PORT}"
+echo "Env file    : ${ENV_FILE}"
+echo "Docker user : ${DOCKER_USER}"
+echo "CloudRun args: ${CLOUDRUN_ARGS:-<none>}"
+
+build_env_inject_args "$ENV_FILE"
+
+echo
+echo "==> Production runtime env vars (masked):"
+for key in "${ENV_INJECT_KEYS[@]}"; do
+  echo "  ${key}=$(mask_value "${!key}")"
+done
+
+echo
+echo "==> Building image: ${IMAGE_TAG}"
+docker build --no-cache -t "${IMAGE_TAG}" .
+
+echo "==> Container layout (inside image) [working directory /tmp]"
+docker run --rm \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+  --user "$DOCKER_USER" \
+  --entrypoint /bin/sh \
+  "$IMAGE_TAG" -c "
+set -eu
+echo 'PWD:' \$(pwd)
+echo 'ls -la /:'
+ls -la /
+echo
+echo 'ls -la /tmp:'
+ls -la /tmp
+echo
+echo 'ls -la working directory:'
+ls -la .
+"
+
+echo
+echo "==> Running container on localhost:${PORT} (Ctrl+C to stop)"
+docker run --rm -it \
+  -p "${PORT}:${PORT}" \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+  --user "$DOCKER_USER" \
+  -e "PORT=${PORT}" \
+  "${ENV_INJECT_ARGS[@]}" \
+  $CLOUDRUN_ARGS \
+  "${IMAGE_TAG}"

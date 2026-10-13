@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "${PORTMASON_SHARE}/pm-helpers"
+
+echo "==== [$(date -Is)] pm-configure-site-node start ===="
+
+##EXAMPLE FOR PM-CONFIGURE-WP-BOILERPLATE.SH
+### ---------- Basic options ----------
+##echo "Configuring basic site options…"
+##wp option update home "$WP_SITE_URL" >/dev/null
+##wp option update siteurl "$WP_SITE_URL" >/dev/null
+##wp option update blogdescription "Dual-language residential concept in Riyadh (contest dev stack)" >/dev/null || true
+##wp rewrite structure '/%postname%/' --hard >/dev/null || true
+
+echo "==== [$(date -Is)] pm-configure-site-node end ===="

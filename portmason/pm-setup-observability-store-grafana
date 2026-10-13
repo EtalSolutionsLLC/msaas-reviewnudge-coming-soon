@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability" "$@"
+
+[[ "${OBSERVABILITY_STORE_PROVIDER_CODE:-}" == grafana ]] \
+    || die "grafana store dependency requires OBSERVABILITY_STORE_PROVIDER_PLATFORM_CODE=grafana-<platform>" 2
+: "${OBSERVABILITY_STORE_NAME:?OBSERVABILITY_STORE_NAME required}"
+if [[ "${OBSERVABILITY_STORE_PLATFORM_CODE:-}" == local ]]; then
+    [[ "${OBSERVABILITY_STORE_INTERNAL_URL:-}" =~ ^https?://[^[:space:]]+$ ]] \
+        || die "Local observability store requires a valid internal URL" 2
+else
+    : "${OBSERVABILITY_OTEL_EXPORTER_OTLP_ENDPOINT:?Grafana Cloud OTLP exporter endpoint required}"
+    [[ "${OBSERVABILITY_OTEL_EXPORTER_OTLP_ENDPOINT}" =~ ^https?://[^[:space:]]+$ ]] \
+        || die "Grafana Cloud OTLP exporter endpoint must be an HTTP or HTTPS URL" 2
+    : "${OBSERVABILITY_OTLP_INSTANCE_ID:?Grafana Cloud OTLP instance ID required}"
+    : "${OBSERVABILITY_OTLP_AUTH_TOKEN:?Grafana Cloud OTLP authentication token required}"
+fi
+log INFO "Grafana Cloud store contract ready" \
+    "platform=${OBSERVABILITY_STORE_PLATFORM_CODE}" "store=${OBSERVABILITY_STORE_NAME}"

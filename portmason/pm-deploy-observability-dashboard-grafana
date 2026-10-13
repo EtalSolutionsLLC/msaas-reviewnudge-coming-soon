@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability" "$@"
+
+[[ "${OBSERVABILITY_STORE_PLATFORM_CODE:-}" != local ]] || return 0
+pm_observability_require_compose_service dashboard
+: "${OBSERVABILITY_DASHBOARD_URL:?OBSERVABILITY_DASHBOARD_URL required}"
+: "${OBSERVABILITY_DASHBOARD_API_TOKEN:?OBSERVABILITY_DASHBOARD_API_TOKEN required}"
+#observability_hydrate_secret OBSERVABILITY_DASHBOARD_API_TOKEN
+dashboard_dir="${SITE_ROOT}/observability/grafana/dashboards"
+folder_uid="${OBSERVABILITY_DASHBOARD_FOLDER_UID:-reviewnudge}"
+folder_title="${OBSERVABILITY_DASHBOARD_FOLDER_TITLE:-ReviewNudge}"
+
+grafana_request() {
+    local method="${1:?method required}"
+    local path="${2:?path required}"
+    local data_file="${3:-}"
+    local -a args=(--silent --show-error --fail-with-body --request "$method" --header 'Content-Type: application/json')
+    [[ -z "$data_file" ]] || args+=(--data-binary "@$data_file")
+
+    printf 'header = "Authorization: Bearer %s"\n' "$OBSERVABILITY_DASHBOARD_API_TOKEN" \
+        | curl "${args[@]}" --config - "${OBSERVABILITY_DASHBOARD_URL%/}${path}"
+}
+
+folder_payload="$(mktemp)"
+dashboard_payload="$(mktemp)"
+datasource_catalog="$(mktemp)"
+printf '{"uid":"%s","title":"%s"}\n' "$folder_uid" "$folder_title" > "$folder_payload"
+if ! grafana_request GET "/api/folders/${folder_uid}" >/dev/null 2>&1; then
+    grafana_request POST '/api/folder.grafana.app/v1' "$folder_payload" >/dev/null
+    log INFO "Grafana dashboard folder created" "uid=$folder_uid"
+fi
+
+grafana_request GET '/api/datasources' > "$datasource_catalog"
+prometheus_uid="$(jq -r '
+    [.[] | select(.type == "prometheus" and ((.uid | test("usage|billing"; "i")) | not))] as $all
+    | (([$all[] | select(.isDefault == true)] + $all)[0].uid // empty)
+' "$datasource_catalog")"
+loki_uid="$(jq -r '
+    [.[] | select(.type == "loki" and ((.uid | test("usage|alert-state"; "i")) | not))] as $all
+    | (([$all[] | select((.url // "") | contains("logs-prod"))] + $all)[0].uid // empty)
+' "$datasource_catalog")"
+tempo_uid="$(jq -r '[.[] | select(.type == "tempo")][0].uid // empty' "$datasource_catalog")"
+[[ -n "$prometheus_uid" ]] || die "Grafana Prometheus datasource was not found" 2
+[[ -n "$loki_uid" ]] || die "Grafana Loki datasource was not found" 2
+[[ -n "$tempo_uid" ]] || die "Grafana Tempo datasource was not found" 2
+log INFO "Grafana datasource capabilities resolved" \
+    "prometheus=$prometheus_uid" "loki=$loki_uid" "tempo=$tempo_uid"
+
+dashboard_count=0
+while IFS= read -r dashboard_file; do
+    dashboard_uid="$(jq -r '.uid' "$dashboard_file")"
+    resolved_dashboard="$(mktemp)"
+    jq --arg prometheus_uid "$prometheus_uid" \
+        --arg loki_uid "$loki_uid" \
+        --arg tempo_uid "$tempo_uid" '
+        walk(
+            if type == "object" and .type? == "prometheus" and has("uid") then .uid = $prometheus_uid
+            elif type == "object" and .type? == "loki" and has("uid") then .uid = $loki_uid
+            elif type == "object" and .type? == "tempo" and has("uid") then .uid = $tempo_uid
+            else . end
+        )
+    ' "$dashboard_file" > "$resolved_dashboard"
+    jq --arg folder_uid "$folder_uid" \
+        '{dashboard: ., folderUid: $folder_uid, overwrite: true, message: "Managed by Portmason"}' \
+        "$resolved_dashboard" > "$dashboard_payload"
+    grafana_request POST '/api/dashboards/db' "$dashboard_payload" >/dev/null
+    grafana_request GET "/api/dashboards/uid/${dashboard_uid}" >/dev/null
+    rm -f -- "$resolved_dashboard"
+    dashboard_count=$((dashboard_count + 1))
+    log INFO "Grafana dashboard deployed and verified" "uid=$dashboard_uid"
+done < <(find "$dashboard_dir" -maxdepth 1 -type f -name '*.json' -print | LC_ALL=C sort)
+
+rm -f -- "$folder_payload" "$dashboard_payload" "$datasource_catalog"
+(( dashboard_count > 0 )) || die "No Grafana dashboards were deployed" 2
+log INFO "Grafana dashboard deployment complete" "count=$dashboard_count" "folder=$folder_uid"

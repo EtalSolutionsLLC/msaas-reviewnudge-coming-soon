@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability" "$@"
+
+#pm_observability_render_environment
+pm_observability_validate_local_realization

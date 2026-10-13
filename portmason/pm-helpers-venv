@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# Adapter: venv
+# Purpose: Provide a deterministic, local Python virtual environment runner for CLI-style jobs.
+#
+
+# --- Configuration (env overridable) ---
+: "${PROJECT_DIR:=${SITE_DIR}}"
+: "${VENV_DIR:=${PROJECT_DIR}/.venv}"
+: "${PYTHON_BIN:=python3}"
+: "${REQUIREMENTS_FILE:=${PROJECT_DIR}/requirements.txt}"
+: "${PYPROJECT_FILE:=${PROJECT_DIR}/pyproject.toml}"
+: "${PIP_ARGS:=}"
+
+pip() {
+  local pip="${VENV_DIR}/bin/pip"
+  [[ -x "$pip" ]] || die "venv pip not found at: $pip (VENV_DIR=$VENV_DIR)"
+  printf '%s' "$pip"
+}
+
+py() {
+  local py="${VENV_DIR}/bin/python"
+  [[ -x "$py" ]] || die "venv python not found at: $py (VENV_DIR=$VENV_DIR)"
+  printf '%s' "$py"
+}
+
+ensure_runtime() {
+  if have "$PYTHON_BIN"; then
+    return 0
+  fi
+  die "Python interpreter not found: PYTHON_BIN=$PYTHON_BIN (try python3.11, python3.12, etc.)"
+}
+
+ensure_env_created() {
+    . "${PORTMASON_SHARE}/pm-setup-py-venv"
+  ensure_python
+
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    log "venv present: ${VENV_DIR}"
+    return 0
+  fi
+
+  log "Creating venv: ${VENV_DIR} (PYTHON_BIN=$PYTHON_BIN)"
+  mkdir -p "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+
+  # Upgrade pip tooling for predictable installs
+  log "Upgrading pip/setuptools/wheel in venv"
+  "$(venv_python)" -m pip install --upgrade pip setuptools wheel ${PIP_ARGS} >/dev/null
+}
+
+ensure_pip() {
+  ensure_venv_created
+
+  if [[ -f "$REQUIREMENTS_FILE" ]]; then
+    log "Installing dependencies from requirements: $(basename "$REQUIREMENTS_FILE")"
+    "$(venv_pip)" install -r "$REQUIREMENTS_FILE" ${PIP_ARGS}
+    return 0
+  fi
+
+  if [[ -f "$PYPROJECT_FILE" ]]; then
+    # Keep this conservative: don't assume poetry/pdm/uv is present.
+    # If client wants pyproject installs, they can provide a requirements export or specify their tool.
+    warn "pyproject.toml detected but no requirements.txt found. Skipping dependency install."
+    warn "If you want pyproject installs, export requirements or provide a tool-based installer in adapter."
+    return 0
+  fi
+
+  log "No requirements.txt or pyproject.toml found; skipping dependency install."
+}
+
+
+# Expose a helper to print the effective venv python path (useful in other scripts)
+print_venv_python() {
+  ensure_venv_created
+  venv_python
+  echo
+}

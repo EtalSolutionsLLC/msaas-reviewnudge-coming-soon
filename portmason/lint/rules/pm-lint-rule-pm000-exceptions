@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm000() { :; }
+pm_lint_register_rule PM000 ERROR project \
+    "Exception integrity" \
+    "TGF Enforcement; TGF Exceptions" \
+    pm_lint_rule_pm000

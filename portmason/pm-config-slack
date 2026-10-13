@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_slack() {
+    if ! declare -F pm_slack_validate_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-slack"
+    fi
+    pm_slack_validate_config
+    local scopes='pm-support-channel,support-channel,support-bot'
+    pm_config_register PM_SUPPORT_CHANNEL_PROVIDER var "$scopes" SUPPORT_CHANNEL_PROVIDER optional
+    pm_config_register PM_SUPPORT_CHANNEL_ID var "$scopes" SUPPORT_CHANNEL_ID optional
+    pm_config_register PM_SUPPORT_CHANNEL_CLIENT_ID var "$scopes" SUPPORT_CHANNEL_CLIENT_ID optional
+    pm_config_register PM_SUPPORT_CHANNEL_AI_ENABLED var "$scopes" SUPPORT_CHANNEL_AI_ENABLED optional
+    pm_config_register PM_SUPPORT_CHANNEL_AI_AUTONOMY_ENABLED var "$scopes" SUPPORT_CHANNEL_AI_AUTONOMY_ENABLED optional
+    pm_config_register PM_SUPPORT_CHANNEL_BOT_TOKEN secret "$scopes" SUPPORT_CHANNEL_BOT_TOKEN required
+    pm_config_register PM_SUPPORT_CHANNEL_SOCKET_TOKEN secret "$scopes" SUPPORT_CHANNEL_SOCKET_TOKEN required
+    pm_config_register PM_SUPPORT_CHANNEL_CLIENT_SECRET secret "$scopes" SUPPORT_CHANNEL_CLIENT_SECRET optional
+    pm_config_register PM_SUPPORT_CHANNEL_SIGNING_SECRET secret "$scopes" SUPPORT_CHANNEL_SIGNING_SECRET optional
+}

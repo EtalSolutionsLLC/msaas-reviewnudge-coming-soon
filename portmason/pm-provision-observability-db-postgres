@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+pm_observabilitobservabilitobservabilitobservability_db_rt() {
+    PM_DB_SERVICE=observability \
+    PM_DB_RT_HOST="${PM_DB_RT_HOST:-${OBSERVABILITY_DB_HOST:-}}" \
+    PM_DB_RT_PORT="${PM_DB_RT_PORT:-${OBSERVABILITY_DB_PORT:-5432}}" \
+    PM_DB_RT_USER="${PM_DB_RT_USER:-${OBSERVABILITY_DB_USER:-}}" \
+    PM_DB_RT_PASSWORD="${PM_DB_RT_PASSWORD:-${OBSERVABILITY_DB_PASSWORD:-}}" \
+    PM_DB_RT_DATABASE="${PM_DB_RT_DATABASE:-${OBSERVABILITY_DB_NAME:-}}" \
+        db_rt "$@"
+}
+
+pm_observability_postgres_psql_admin() {
+    PM_DB_RT_HOST="${PM_OBSERVABILITY_DB_ADMIN_HOST:-${OBSERVABILITY_DB_HOST:?OBSERVABILITY_DB_HOST required}}" \
+    PM_DB_RT_PORT="${PM_OBSERVABILITY_DB_ADMIN_PORT:-${OBSERVABILITY_DB_PORT:-5432}}" \
+    PM_DB_RT_USER="${PM_OBSERVABILITY_DB_ADMIN_USER:-${OBSERVABILITY_DB_USER:?OBSERVABILITY_DB_USER required}}" \
+    PM_DB_RT_PASSWORD="${PM_OBSERVABILITY_DB_ADMIN_PASSWORD:-${OBSERVABILITY_DB_PASSWORD:?OBSERVABILITY_DB_PASSWORD required}}" \
+    PM_DB_RT_DATABASE="${PM_OBSERVABILITY_DB_ADMIN_NAME:-postgres}" \
+        pm_observabilitobservabilitobservabilitobservability_db_rt "$@"
+}
+
+pm_observability_postgres_ensure_role() {
+    log INFO "ensuring application role" \
+        "role=${OBSERVABILITY_DB_USER:?OBSERVABILITY_DB_USER required}"
+
+    if [[ "${PM_OBSERVABILITY_DB_PLATFORM_CODE:-}" == neon ]]; then
+        log INFO "Neon application role already provisioned by the Neon API" \
+            "role=$OBSERVABILITY_DB_USER"
+        return 0
+    else
+        # The application password travels through an inherited environment
+        # value, never a command-line argument. psql imports it into a private
+        # variable at execution time so neither Portmason logs nor process
+        # listings expose it.
+        PM_DB_SQL_SECRET="$OBSERVABILITY_DB_PASSWORD" \
+            pm_observability_postgres_psql_admin --set=db_user="$OBSERVABILITY_DB_USER" --file=- <<'SQL'
+\getenv db_password PM_DB_SQL_SECRET
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') \gexec
+SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password') \gexec
+-- Managed-service administrators are not PostgreSQL superusers. Give the
+-- administrator SET ROLE capability so it can assign database ownership while
+-- preserving the application's non-inherited privilege boundary.
+SELECT CASE
+  WHEN current_setting('server_version_num')::integer >= 160000
+    THEN format('GRANT %I TO %I WITH SET TRUE', :'db_user', current_user)
+  ELSE format('GRANT %I TO %I', :'db_user', current_user)
+END
+WHERE current_user <> :'db_user' \gexec
+SQL
+    fi
+
+    log INFO "application role ready" \
+        "role=$OBSERVABILITY_DB_USER"
+}
+
+pm_observability_postgres_ensure_database() {
+    log INFO "ensuring application database" \
+        "database=${OBSERVABILITY_DB_NAME:?OBSERVABILITY_DB_NAME required}" "owner=$OBSERVABILITY_DB_USER"
+
+    if [[ "${PM_OBSERVABILITY_DB_PLATFORM_CODE:-}" == neon ]]; then
+        log INFO "Neon application database already provisioned by the Neon API" \
+            "database=$OBSERVABILITY_DB_NAME" "owner=$OBSERVABILITY_DB_USER"
+        return 0
+    fi
+
+    # psql variable interpolation and \gexec are client-side features. Feed the
+    # script through --file=- so psql processes them before sending SQL to the
+    # server. Passing the same text through --command sends :'name' verbatim.
+    pm_observability_postgres_psql_admin \
+        --set=db_name="$OBSERVABILITY_DB_NAME" \
+        --set=db_user="$OBSERVABILITY_DB_USER" \
+        --file=- <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') \gexec
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user') \gexec
+SQL
+
+    log INFO "application database ready" \
+        "database=$OBSERVABILITY_DB_NAME" "owner=$OBSERVABILITY_DB_USER"
+}
+
+pm_observability_postgres_apply_base_grants() {
+    log INFO "applying base ownership and grants" \
+        "database=$OBSERVABILITY_DB_NAME" "role=$OBSERVABILITY_DB_USER"
+    PM_DB_RT_USER="$OBSERVABILITY_DB_USER" \
+    PM_DB_RT_PASSWORD="$OBSERVABILITY_DB_PASSWORD" \
+    PM_DB_RT_DATABASE="$OBSERVABILITY_DB_NAME" \
+        pm_observabilitobservabilitobservabilitobservability_db_rt --set=db_user="$OBSERVABILITY_DB_USER" --file=- <<'SQL'
+SELECT format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO %I', current_database(), :'db_user') \gexec
+SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'db_user') \gexec
+SQL
+    log INFO "base ownership and grants ready" \
+        "database=$OBSERVABILITY_DB_NAME" "role=$OBSERVABILITY_DB_USER"
+}
+
+pm_provision_observabilitobservabilitobservabilitobservability_db_provider() {
+
+    [[ "${PM_OBSERVABILITY_DB_PROVIDER_CODE:-}" == "postgres" ]] \
+        || die "pm-provision-observability-db-postgres requires OBSERVABILITY_DB_PROVIDER_PLATFORM_CODE=postgres-<platform>" 2
+
+    #pm_observability_hydrate_secret OBSERVABILITY_DB_USER
+    #pm_observability_hydrate_secret OBSERVABILITY_DB_PASSWORD
+
+    : "${OBSERVABILITY_DB_NAME:?OBSERVABILITY_DB_NAME required}"
+    : "${OBSERVABILITY_DB_USER:?OBSERVABILITY_DB_USER required}"
+    : "${OBSERVABILITY_DB_PASSWORD:?OBSERVABILITY_DB_PASSWORD required}"
+    if [[ -n "${PM_OBSERVABILITY_DB_ADMIN_USER:-}" \
+        && "$OBSERVABILITY_DB_USER" == "$PM_OBSERVABILITY_DB_ADMIN_USER" ]]; then
+        die "OBSERVABILITY_DB_USER must be an application role, not the discovered database administrator" 2
+    fi
+
+    log INFO "starting provider provisioning" \
+        "platform=${PM_OBSERVABILITY_DB_PLATFORM_CODE:-}" "database=$OBSERVABILITY_DB_NAME" "user=$OBSERVABILITY_DB_USER"
+
+    pm_observability_postgres_ensure_role
+    pm_observability_postgres_ensure_database
+    pm_observability_postgres_apply_base_grants
+
+    log INFO "provider provisioning complete" \
+        "database=$OBSERVABILITY_DB_NAME" "user=$OBSERVABILITY_DB_USER"
+}
+
+main() {
+    pm_provision_observabilitobservabilitobservabilitobservability_db_provider "$@"
+}
+
+main "$@"

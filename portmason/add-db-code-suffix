@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+platform='(?<![A-Za-z0-9_])DB_PLATFORM(?!_CODE\b)(?![A-Za-z0-9_])'
+provider='(?<![A-Za-z0-9_])DB_PROVIDER(?!_CODE\b)(?![A-Za-z0-9_])'
+
+updated=0
+
+while IFS= read -r -d '' file; do
+  if grep -Iq . "$file" && grep -Pq "$platform|$provider" "$file"; then
+    perl -pi -e '
+      s/(?<![A-Za-z0-9_])DB_PLATFORM(?!_CODE\b)(?![A-Za-z0-9_])/DB_PLATFORM_CODE/g;
+      s/(?<![A-Za-z0-9_])DB_PROVIDER(?!_CODE\b)(?![A-Za-z0-9_])/DB_PROVIDER_CODE/g;
+    ' "$file"
+
+    printf 'Updated: %s\n' "${file#./}"
+    ((updated += 1))
+  fi
+done < <(find . -maxdepth 1 -type f ! -name 'add-db-code-suffix' -print0)
+
+printf '\nChecking for remaining unsuffixed instances...\n'
+
+if grep -nHP "$platform|$provider" ./* 2>/dev/null; then
+  printf 'Verification failed: unsuffixed instances remain.\n' >&2
+  exit 1
+fi
+
+printf 'Verification passed. Updated %d file(s).\n' "$updated"

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_godaddy() {
+    if ! declare -F pm_godaddy_validate_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-godaddy"
+    fi
+    pm_godaddy_validate_config
+    local scopes='pm-acme-dns,acme-dns,traefik,proxy'
+    pm_config_register PM_ACME_EMAIL var "$scopes" ACME_EMAIL optional
+    pm_config_register PM_ACME_DNS_TTL var "$scopes" GODADDY_TTL optional
+    pm_config_register PM_ACME_DNS_PROPAGATION_TIMEOUT var "$scopes" GODADDY_PROPAGATION_TIMEOUT optional
+    pm_config_register PM_ACME_DNS_POLLING_INTERVAL var "$scopes" GODADDY_POLLING_INTERVAL optional
+    pm_config_register PM_ACME_DNS_API_KEY secret "$scopes" GODADDY_API_KEY required
+    pm_config_register PM_ACME_DNS_API_SECRET secret "$scopes" GODADDY_API_SECRET required
+}

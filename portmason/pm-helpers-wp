@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+
+# --- Derive HTTP_HOST / SERVER_NAME for WP-CLI ---
+HTTP_HOST_FROM_ENV="${HTTP_HOST:-}"
+if [[ -z "$HTTP_HOST_FROM_ENV" && -n "${WP_SITE_URL:-}" ]]; then
+  HTTP_HOST_FROM_ENV="$(printf '%s\n' "$WP_SITE_URL" | sed -E 's~https?://([^/]+).*~\1~')"
+fi
+if [[ -z "$HTTP_HOST_FROM_ENV" && -n "${APP_HOST:-}" ]]; then
+  HTTP_HOST_FROM_ENV="$APP_HOST"
+fi
+if [[ -n "$HTTP_HOST_FROM_ENV" ]]; then
+  HTTP_HOST="$HTTP_HOST_FROM_ENV"
+  SERVER_NAME="$HTTP_HOST_FROM_ENV"
+  echo "HTTP_HOST for WP-CLI: $HTTP_HOST_FROM_ENV"
+else
+  echo "WARNING: Could not derive HTTP_HOST; WP-CLI may log HTTP_HOST notices." >&2
+fi
+
+# --- Helpers ---
+# exit status: 0 = noop, 1 = installed core & activated default etal-core theme, 2 = installed core but could NOT activate default etal-core theme
+install_core() {
+  if ! rt core is-installed --perform_readiness_check >/dev/null 2>&1; then
+    echo "[${script_name}] Installing WordPress core via WP-CLI…"
+    rt core install \
+      --url="${WP_SITE_URL:?WP_SITE_URL must be set in .env}" \
+      --title="${WP_SITE_TITLE:-WordPress Site}" \
+      --admin_user="${WP_ADMIN_USER:?WP_ADMIN_USER must be set in .env}" \
+      --admin_password="${WP_ADMIN_PASS:?WP_ADMIN_PASS must be set in .env}" \
+      --admin_email="${WP_ADMIN_EMAIL:?WP_ADMIN_EMAIL must be set in .env}" \
+      --skip-email
+
+    echo "[${script_name}] Configuring basic WordPress site options…"
+    rt option update home "$WP_SITE_URL" --perform_readiness_check >/dev/null || true
+    rt option update siteurl "$WP_SITE_URL" >/dev/null || true
+
+    nuke_content
+
+    # Rely on baked-in theme files; only activate (do not install/download).
+    if rt theme is-installed etal-core >/dev/null 2>&1; then
+      rt theme activate etal-core >/dev/null
+      echo "[${script_name}] ✅ Activated default theme: etal-core"
+    else
+      echo "[${script_name}] ⚠️  Default theme not found (etal-core). Leaving base default theme active." >&2
+      rt theme list >&2 || true
+      die 2
+    fi
+
+    echo "[${script_name}] ✅ WordPress core installed."
+    die  1
+  else
+    echo "[${script_name}] WordPress core already installed; skipping core install."
+    script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+    ok
+  fi
+}
+
+nuke_content(){
+    echo "[${script_name}] Deleting default content..."
+    rt post delete $(rt post list --post_type=any --post_status=any --field=ID --format=ids 2>/dev/null) --force >/dev/null 2>&1 || true
+
+    # Delete ALL comments
+    rt comment delete $(rt comment list --field=comment_ID --format=ids 2>/dev/null) --force >/dev/null 2>&1 || true
+
+    # Delete ALL terms (categories, tags, custom taxonomies)
+#    while read -r tax; do
+#        ids="$(rt term list "$tax" --field=term_id --format=ids 2>/dev/null || true)"
+#        [[ -n "$ids" ]] && rt term delete "$tax" $ids >/dev/null 2>&1 || true
+#    done < <(rt taxonomy list --field=name)
+
+    # Delete ALL navigation menus
+    rt menu delete $(rt menu list --field=term_id --format=ids 2>/dev/null) >/dev/null 2>&1 || true
+
+    # Clear widgets (sidebar state)
+    rt option delete sidebars_widgets >/dev/null 2>&1 || true
+
+    # Reset front page / posts page
+    rt option update show_on_front posts >/dev/null 2>&1 || true
+    rt option delete page_on_front >/dev/null 2>&1 || true
+    rt option delete page_for_posts >/dev/null 2>&1 || true
+
+    echo "[${script_name}] Successfully deleted default content."
+}
+
+ensure_plugin() {
+  local slug="$1"
+  if ! rt plugin is-installed "$slug" >/dev/null 2>&1; then
+    log "Installing + activating plugin: $slug"
+    rt plugin install "$slug" --activate >/dev/null
+    ok
+  fi
+  if ! rt plugin is-active "$slug" >/dev/null 2>&1; then
+    log "Activating plugin: $slug"
+    rt plugin activate "$slug" >/dev/null
+    ok
+  fi
+  ok "Plugin '$slug' already installed and activated"
+}
+
+page_id_by_slug() {
+  local slug="$1"
+  rt post list --post_type=page --pagename="$slug" --field=ID --format=ids 2>/dev/null | tr -d '\n' || true
+}
+
+update_page_by_slug() {
+  local slug="$1"
+  local content="$2"
+  local id
+  id="$(page_id_by_slug "$slug")"
+  [[ -n "${id:-}" ]] || die "Page not found: $slug"
+  rt post update "$id" --post_content="$content" >/dev/null
+}
+
+ensure_page() {
+  local slug="$1"
+  local title="$2"
+  local id
+
+  id="$(page_id_by_slug "$slug")"
+
+  if [[ -z "${id:-}" ]]; then
+    id="$(rt post create \
+            --post_type=page \
+            --post_status=publish \
+            --post_title="$title" \
+            --post_name="$slug" \
+            --porcelain )"
+
+    echo "[${script_name}] Created page '$title' ($slug) with ID $id" >&2
+  else
+    echo "[${script_name}] Found page '$title' ($slug) with ID $id" >&2
+  fi
+
+  # IMPORTANT: stdout = ID only
+  printf '%s\n' "$id"
+}
+
+detect_menu_location() {
+  local pattern="$1"
+  local fallback_index="$2"
+  local loc
+  loc="$(rt menu location list --fields=location,description --format=csv 2>/dev/null | awk -F',' -v pat="$pattern" 'NR>1 { n=tolower($1) " " tolower($2); if (n ~ pat) { print $1; exit } }')"
+  if [[ -n "$loc" ]]; then
+    printf '%s\n' "$loc"
+    ok
+  fi
+  if [[ -n "$fallback_index" ]]; then
+    loc="$(rt menu location list --fields=location --format=csv 2>/dev/null | awk -F',' -v idx="$fallback_index" 'NR>1 {i++; if (i==idx) {print $1; exit}}')"
+    if [[ -n "$loc" ]]; then
+      printf '%s\n' "$loc"
+      ok
+    fi
+  fi
+  die
+}
+
+ensure_term() {
+  local taxonomy="$1"
+  local name="$2"
+  local slug="$3"
+
+  local term_id
+  term_id="$(rt term list "$taxonomy" --format=csv 2>/dev/null | awk -F, -v n="$name" 'NR>1 && $2==n {print $1; exit}')"
+  if [[ -z "${term_id:-}" ]]; then
+    term_id="$(rt term create "$taxonomy" "$name" --slug="$slug" --porcelain)"
+  fi
+  printf '%s' "$term_id"
+}
+
+ensure_cf7_form() {
+  # Contact Form 7 forms are post type: wpcf7_contact_form
+  local title="$1"
+  local slug="$2"
+  local id
+
+  id="$(rt post list --post_type=wpcf7_contact_form --name="$slug" --field=ID --format=ids 2>/dev/null | tr -d '\n' || true)"
+  if [[ -z "${id:-}" ]]; then
+    log "Creating CF7 form: $title"
+    id="$(rt post create --post_type=wpcf7_contact_form --post_status=publish --post_title="$title" --post_name="$slug" --porcelain)"
+    # Attempt to set form markup (best-effort; CF7 internals can vary)
+    rt post meta update "$id" _form \
+$'[text* your-name placeholder "Your name"]\n[email* your-email placeholder "Your email"]\n[text your-subject placeholder "Subject"]\n[textarea your-message placeholder "Message"]\n[submit "Send"]' >/dev/null 2>&1 || true
+  fi
+  printf '%s' "$id"
+}
+
+ensure_mc4wp_form() {
+  # Mailchimp for WP uses post type: mc4wp-form
+  local title="$1"
+  local slug="$2"
+  local id
+
+  id="$(rt post list --post_type=mc4wp-form --name="$slug" --field=ID --format=ids 2>/dev/null | tr -d '\n' || true)"
+  if [[ -z "${id:-}" ]]; then
+    log "Creating MC4WP form: $title"
+    id="$(rt post create --post_type=mc4wp-form --post_status=publish --post_title="$title" --post_name="$slug" --porcelain)"
+    rt post update "$id" --post_content \
+$'<p><label>Email</label><br><input type="email" name="EMAIL" required></p>\n<p><label><input type="checkbox" name="INTERESTS[physical]" value="1"> Physical</label></p>\n<p><label><input type="checkbox" name="INTERESTS[digital]" value="1"> Digital</label></p>\n<p><label><input type="checkbox" name="INTERESTS[services]" value="1"> Services</label></p>\n<p><input type="submit" value="Subscribe"></p>' >/dev/null
+  fi
+  printf '%s' "$id"
+}
+
+create_simple_product() {
+  # Creates a simple WooCommerce product via core post/meta (no wp wc dependency)
+  local slug="$1"
+  local title="$2"
+  local short="$3"
+  local content="$4"
+  local price="$5"
+  local product_cat_term_id="${6:-}"
+  local downloadable="${7:-no}"
+  local virtual="${8:-no}"
+
+  local id
+  id="$(rt post list --post_type=product --name="$slug" --field=ID --format=ids 2>/dev/null | tr -d '\n' || true)"
+  if [[ -n "${id:-}" ]]; then
+    printf '%s' "$id"
+    ok "Product exists: $title id=$id"
+  fi
+
+  log "Creating product: $title"
+  id="$(rt post create --post_type=product --post_status=publish --post_title="$title" --post_name="$slug" --post_excerpt="$short" --post_content="$content" --porcelain)"
+
+  # Product type
+  rt term set product_type "$id" simple >/dev/null 2>&1 || true
+
+  # Pricing
+  rt post meta update "$id" _regular_price "$price" >/dev/null
+  rt post meta update "$id" _price "$price" >/dev/null
+
+  # Flags
+  rt post meta update "$id" _downloadable "$downloadable" >/dev/null
+  rt post meta update "$id" _virtual "$virtual" >/dev/null
+
+  # Category
+  if [[ -n "${product_cat_term_id:-}" ]]; then
+    rt term set product_cat "$id" "$product_cat_term_id" >/dev/null 2>&1 || true
+  fi
+
+  printf '%s' "$id"
+}
+
+ensure_post() {
+  local post_type="$1"
+  local slug="$2"
+  local title="$3"
+  local content="$4"
+  local excerpt="${5:-}"
+
+  local id
+  id="$(rt post list --post_type="$post_type" --name="$slug" --field=ID --format=ids 2>/dev/null | tr -d '\n' || true)"
+  if [[ -z "${id:-}" ]]; then
+    log "Creating $post_type: $title"
+    id="$(rt post create --post_type="$post_type" --post_status=publish --post_title="$title" --post_name="$slug" --post_content="$content" --post_excerpt="$excerpt" --porcelain)"
+  else
+    log "$post_type exists: $title id=$id"
+  fi
+  printf '%s' "$id"
+}
+
+ensure_theme() {
+    if [[ -n "${WP_THEME_SLUG:-}" ]]; then
+        echo "Ensuring theme '${WP_THEME_SLUG}' is installed and active…"
+        if ! rt theme is-installed "$WP_THEME_SLUG" >/dev/null 2>&1; then
+            echo "[${script_name}] Theme '${WP_THEME_SLUG}' not installed; installing from WordPress.org…"
+            rt theme install "$WP_THEME_SLUG" --activate
+            ok "[${script_name}] ✅ Theme '${WP_THEME_SLUG}' installed and activated. Please clean up default artifacts if desired."
+        else
+            ACTIVE_THEME="$(rt theme status "$WP_THEME_SLUG" 2>/dev/null | awk '/Status:/ {print $2}')"
+            if [[ "$ACTIVE_THEME" != "active" ]]; then
+                rt theme activate "$WP_THEME_SLUG"
+                ok "[${script_name}] ✅ Theme '${WP_THEME_SLUG}' activated. Please clean up default artifacts if desired"
+            else
+                ok "[${script_name}] Theme '${WP_THEME_SLUG}' already active."
+            fi
+        fi
+    else
+        fatal_error "[${script_name}] WP_THEME_SLUG not set. Please set WP_THEME_SLUG in the env file."
+    fi
+
+    ok
+}
+
+ensure_menu() {
+  local desired_name="$1"
+  local menu_slug
+  local term_id
+  term_id="$(rt menu list --fields=name,slug,term_id --format=csv 2>/dev/null | awk -F',' -v n="$desired_name" 'NR>1 && $1==n {print $3; exit}')"
+  if [[ -z "$term_id" ]]; then
+    term_id="$(rt menu create "$desired_name" --porcelain)"
+    echo "[${script_name}] Created menu '$desired_name' (term_id: $term_id)"
+  else
+    echo "[${script_name}] Found existing menu '$desired_name' (term_id: $term_id)"
+  fi
+  menu_slug="$(rt menu list --fields=term_id,slug --format=csv 2>/dev/null | awk -F',' -v id="$term_id" 'NR>1 && $1==id {print $2; exit}')"
+  if [[ -z "$menu_slug" ]]; then
+    menu_slug="$(rt menu list --fields=name,slug --format=csv 2>/dev/null | awk -F',' -v n="$desired_name" 'NR>1 && $1==n {print $2; exit}')"
+  fi
+  if [[ -z "$menu_slug" ]]; then
+    echo "[${script_name}] WARNING: Could not determine slug for menu '$desired_name' (term_id: $term_id)" >&2
+  else
+    echo "[${script_name}] Menu '$desired_name' slug resolved to '$menu_slug'"
+  fi
+  printf '%s\n' "$menu_slug"
+}
+
+assign_menu_location_if_possible() {
+  local menu_name="$1"
+  local location="$2"
+  # Not all themes define locations; ignore failures.
+  rt menu location assign "$menu_name" "$location" >/dev/null 2>&1 || true
+}
+
+add_menu_page() {
+  local menu_slug="$1"
+  local title="$2"
+  local page_id="$3"
+  [[ -z "$menu_slug" ]] && return 0
+  [[ -z "$page_id" ]] && return 0
+  local existing
+  existing="$(rt menu item list "$menu_slug" --fields=ID,object_id --format=csv 2>/dev/null | awk -F',' -v pid="$page_id" 'NR>1 && $2==pid {print $1; exit}')"
+  if [[ -n "$existing" ]]; then
+    ok "Menu '$menu_slug' already contains page ID $page_id ($title) as item $existing"
+  fi
+  rt menu item add-post "$menu_slug" "$page_id" --title="$title" >/dev/null
+  ok "Added page '$title' (ID $page_id) to menu '$menu_slug'"
+}
+
+# removes the content ids specified by parameter or safely removes all content
+remove_content(){
+    local content_ids=("$1")
+
+    # Usage inside configuration:
+    if  ${#content_ids[@]} -eq 0 && wp_config_can_reset_pages; then
+        echo "[${script_name}] Performing greenfield reset"
+        content_ids="$(rt post list --post_type=page,post --format=ids)"
+    fi
+
+    if [[ ${#content_ids[@]} -gt 0 ]]; then
+        # Remove all content (pages + posts) in the list
+        if [[ -n "$content_ids" ]]; then
+            rt post delete $content_ids --force
+        fi
+
+        rt option update show_on_front posts
+        rt option delete page_on_front
+        rt option delete page_for_posts
+
+        rt option update etal_setup_state 'wp_configured'
+    else
+        echo "[${script_name}] No content identification passed in and unable to determine if development is in progress; skipping destructive reset"
+    fi
+}

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+
+pm_setup_static_site_root() {
+    local resolved="${SITE_ROOT:-${SITE_DIR:-${PROJECT_ROOT:-$PWD}}}"
+
+
+    # Static runtime setup owns the document-root assignment.
+    # SITE_DIR already resolves root-hosted and www-hosted
+    # static projects.
+
+    env_init_set \
+        SITE_ROOT \
+        "$resolved"
+
+
+    log INFO \
+        "Static runtime site root resolved" \
+        "site_root=$SITE_ROOT"
+}
+
+
+pm_setup_static_site_root
+
+. "${PORTMASON_SHARE}/pm-helpers-static"
+pm_web_write_browser_config
+pm_web_setup

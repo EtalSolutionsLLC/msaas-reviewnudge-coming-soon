@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-db" "$@" ###we have to source this file out of sequence because it contains functions we don't want to replicate
+
+# Usage: pm-ensure-external-networks [compose-file]
+if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
+  PM_COMPOSE_FILE="$1"
+fi
+
+pm_compose_init_command
+pm_compose_control_file COMPOSE_FILE
+export PM_COMPOSE_FILE COMPOSE_FILE
+
+log "Using compose file: $COMPOSE_FILE"
+
+compose_json="$("${PM_COMPOSE_CMD[@]}" config \
+  --no-interpolate \
+  --no-env-resolution \
+  --format json 2>&1)" || {
+  printf 'ERROR: docker compose config failed for %s\n' "$COMPOSE_FILE" >&2
+  printf '%s\n' "$compose_json" \
+    | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' >&2
+  return 1 2>/dev/null || exit 1
+}
+
+if ! jq -e '.networks // {}' >/dev/null 2>&1 <<<"$compose_json"; then
+  printf 'ERROR: docker compose config did not produce valid JSON for %s\n' "$COMPOSE_FILE" >&2
+  printf '%s\n' "$compose_json" \
+    | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+mapfile -t networks < <(
+  printf '%s\n' "$compose_json" \
+  | jq -r '
+      .networks // {}
+      | to_entries[]
+		select(.value.external != null and .value.external != false)
+      | (
+          if .value.name then
+            .value.name
+          elif (.value.external | type == "object" and .value.external.name != null) then
+            .value.external.name
+          else
+            .key
+          end
+        )
+    ' \
+  | sort -u
+)
+
+if ((${#networks[@]} > 0)); then
+  mapfile -t networks < <(
+    printf '%s\n' "${networks[@]}" \
+      | "${PORTMASON_SHARE}/pm-util-render-env" -
+  )
+fi
+
+if ((${#networks[@]} == 0)); then
+  log "No external networks defined in $COMPOSE_FILE"
+  return 0 2>/dev/null || exit 0
+fi
+
+log "External networks found in compose config:"
+printf '  - %s\n' "${networks[@]}"
+log
+
+for net in "${networks[@]}"; do
+  if docker network inspect "$net" >/dev/null 2>&1; then
+    log "✓ Network '$net' already exists"
+  else
+    log "➜ Creating network '$net'..."
+    docker network create "$net"
+  fi
+done

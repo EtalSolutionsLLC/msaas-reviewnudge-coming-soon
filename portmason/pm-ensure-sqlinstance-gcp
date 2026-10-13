@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-}}")}"
+export CUR_SCRIPT
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "$PORTMASON_SHARE/pm-helpers" "$@"
+
+#
+# These variables are intentionally different than prescribed since this function is
+# one of very few pm- functions designed to be run independently
+# For all environments other than prd, we create one instance per org and environment rather than prd's one instance per stack
+#
+main() {
+    local stack
+    if [[ "${DEPLOY_ENV:-dev}" != prd ]]; then
+        # for non-prd environments, we create a single org instance per deploy_env
+        stack=simplifai-team-"${DEPLOY_ENV:-dev}"
+    else
+        stack="${STACK}"
+    fi
+
+    : "${CLOUD_SQL_INSTANCE:="${stack}"-sql}"
+    export CLOUD_SQL_INSTANCE
+    : "${CLOUD_SQL_INSTANCE_CREATED_ANEW:=false}"
+    export CLOUD_SQL_INSTANCE_CREATED_ANEW
+
+    log "Checking if sql instance '${CLOUD_SQL_INSTANCE}' already exists..."
+    if ! gcloud sql instances describe "${CLOUD_SQL_INSTANCE}" >/dev/null 2>&1; then
+        log "Creating sql instance ${CLOUD_SQL_INSTANCE}"
+        gcloud sql instances create "${CLOUD_SQL_INSTANCE}" \
+            --region="${REGION}" \
+            --database-version=MYSQL_8_0 \
+            --tier=db-f1-micro \
+            --storage-auto-increase \
+            --storage-size=10 \
+            --backup-start-time=03:00 \
+            --maintenance-release-channel=production \
+            --maintenance-window-day=SUN \
+            --maintenance-window-hour=4 \
+            --quiet
+        CLOUD_SQL_INSTANCE_CREATED_ANEW=true
+    fi
+
+    return 0
+}
+
+main

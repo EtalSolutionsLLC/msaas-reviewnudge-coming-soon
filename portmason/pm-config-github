@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_config_github() {
+    if ! declare -F pm_github_write_browser_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-github"
+    fi
+}
+
+pm_config_apply_github() {
+    pm_github_write_browser_config
+
+    local sync="${PM_GITHUB_SYNC_ACTIONS_CONFIG:-}"
+    if [[ -z "$sync" ]]; then
+        # Repository variable and secret synchronization is an administrative
+        # operation. A deployment workflow consumes configuration; it must not
+        # attempt to rewrite its own GitHub Actions configuration.
+        if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+            sync=false
+        elif [[ "${DEPLOY_ENV:-dev}" == "dev" ]]; then
+            sync=false
+        else
+            sync=false
+        fi
+    fi
+    case "${sync,,}" in
+        1|true|yes|on) pm_github_sync_actions_config ;;
+        0|false|no|off) 
+            log DEBUG "pm-config-github: Actions synchronization disabled"
+            ;;
+        *) die "PM_GITHUB_SYNC_ACTIONS_CONFIG must be boolean" 2 ;;
+    esac
+}

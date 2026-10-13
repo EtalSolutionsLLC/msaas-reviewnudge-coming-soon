@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+: "${PORTMASON_SHARE:=$SCRIPT_DIR}"
+export PORTMASON_SHARE
+
+# shellcheck disable=SC1091
+. "${PORTMASON_SHARE}/pm-helpers" --read-only
+# shellcheck disable=SC1091
+. "${PORTMASON_SHARE}/pm-helpers-lint"
+
+pm_lint_usage() {
+    cat <<'USAGE'
+Usage:
+  pm-lint [--changed [BASE_REF] | --all] [options] [PATH ...]
+  pm-lint --list-rules
+
+Modes:
+  --changed [BASE_REF]   Lint changed, staged, and untracked files. When a base
+                         ref is supplied, include committed changes since it.
+                         This is the default when no paths are supplied.
+  --all                  Lint all tracked and unignored files.
+  PATH ...               Lint only the supplied files or directories.
+
+Options:
+  --root PATH            Repository root. Defaults to the current Git root or PWD.
+  --format FORMAT        text, github, or json. Default: text.
+  --strict               Treat warnings as failures.
+  --fail-on-review       Treat review findings as failures.
+  --rule PM###           Run one rule only.
+  --exceptions PATH      Override .pm-lint-exceptions location.
+  --rules PATH           Load an additional custom rule directory (repeatable).
+  --list-rules           Print the rule catalog and exit.
+  -h, --help             Show this help.
+
+Exit codes:
+  0  No blocking findings.
+  2  One or more errors, strict warnings, or requested review failures.
+USAGE
+}
+
+pm_lint_default_root() {
+    local out_var="${1:?output variable required}"
+    local resolved_root=""
+    resolved_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+    printf -v "$out_var" '%s' "$resolved_root"
+}
+
+main() {
+    local root=""
+    local list_rules=false
+    local explicit_mode=false
+    local changed_base=""
+    local -a paths=()
+
+    pm_lint_default_root root
+
+    while (( $# > 0 )); do
+        case "$1" in
+            --root)
+                [[ $# -ge 2 ]] || die "pm-lint: --root requires a path" 2
+                root="$2"
+                shift 2
+                ;;
+            --format)
+                [[ $# -ge 2 ]] || die "pm-lint: --format requires a value" 2
+                PM_LINT_FORMAT="$2"
+                shift 2
+                ;;
+            --strict)
+                PM_LINT_STRICT=true
+                shift
+                ;;
+            --fail-on-review)
+                PM_LINT_FAIL_ON_REVIEW=true
+                shift
+                ;;
+            --rule)
+                [[ $# -ge 2 ]] || die "pm-lint: --rule requires PM###" 2
+                PM_LINT_SELECTED_RULE="$2"
+                shift 2
+                ;;
+            --exceptions)
+                [[ $# -ge 2 ]] || die "pm-lint: --exceptions requires a path" 2
+                PM_LINT_EXCEPTION_FILE="$2"
+                shift 2
+                ;;
+            --rules)
+                [[ $# -ge 2 ]] || die "pm-lint: --rules requires a directory" 2
+                PM_LINT_EXTRA_RULE_DIRS+=("$2")
+                shift 2
+                ;;
+            --all)
+                PM_LINT_MODE=all
+                explicit_mode=true
+                shift
+                ;;
+            --changed)
+                PM_LINT_MODE=changed
+                explicit_mode=true
+                shift
+                if (( $# > 0 )) && [[ "$1" != -* ]] && git rev-parse --verify "$1^{commit}" >/dev/null 2>&1; then
+                    changed_base="$1"
+                    shift
+                fi
+                ;;
+            --list-rules)
+                list_rules=true
+                shift
+                ;;
+            -h|--help)
+                pm_lint_usage
+                return 0
+                ;;
+            --)
+                shift
+                paths+=("$@")
+                break
+                ;;
+            -*)
+                die "pm-lint: unknown option: $1" 2
+                ;;
+            *)
+                paths+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    case "$PM_LINT_FORMAT" in
+        text|github|json) ;;
+        *) die "pm-lint: --format must be text, github, or json" 2 ;;
+    esac
+    [[ -z "$PM_LINT_SELECTED_RULE" || "$PM_LINT_SELECTED_RULE" =~ ^PM[0-9]{3}$ ]] \
+        || die "pm-lint: --rule must use PM###" 2
+
+    pm_lint_normalize_root "$root"
+    pm_lint_load_rules
+
+    if [[ "$list_rules" == true ]]; then
+        pm_lint_list_rules
+        return 0
+    fi
+    if [[ -n "$PM_LINT_SELECTED_RULE" && -z "${PM_LINT_RULE_FUNCTION[$PM_LINT_SELECTED_RULE]+x}" ]]; then
+        die "pm-lint: unknown rule: $PM_LINT_SELECTED_RULE" 2
+    fi
+
+    pm_lint_reset_results
+    pm_lint_load_exceptions
+
+    if (( ${#paths[@]} > 0 )); then
+        PM_LINT_TARGET_FILES=()
+        local path
+        for path in "${paths[@]}"; do
+            pm_lint_collect_path "$path"
+        done
+        pm_lint_unique_targets
+    elif [[ "$PM_LINT_MODE" == all ]]; then
+        pm_lint_collect_all
+    else
+        pm_lint_collect_changed "$changed_base"
+    fi
+
+    log INFO "pm-lint: running EPC/TGF checks" \
+        "root=$PM_LINT_ROOT" \
+        "mode=$PM_LINT_MODE" \
+        "files=${#PM_LINT_TARGET_FILES[@]}" \
+        "format=$PM_LINT_FORMAT"
+
+    pm_lint_run_rules
+    pm_lint_output_results
+    pm_lint_exit_code
+}
+
+main "$@"

@@ -1,0 +1,776 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)"}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# Portmason database lifecycle and Compose-contract helpers.
+#
+# This module owns selectors, module discovery, Compose service-role discovery,
+# Compose-model inspection and lifecycle coordination. Provider,
+# platform, and provider-platform behavior remains in independently replaceable
+# pm-helpers-*, pm-provision-*, pm-deploy-*, and pm-db-bridge-* modules.
+
+if ! declare -F log >/dev/null 2>&1; then
+    # PM-LINT-MACHINE-OUTPUT: bootstrap diagnostic before logging exists.
+    printf 'ERROR: pm-helpers-db must be sourced after pm-helpers.\n' >&2
+    return 2 2>/dev/null || exit 2
+fi
+
+declare -gA PM_DB_LOADED_MODULES=()
+declare -ga PM_COMPOSE_CMD=()
+declare -ga PM_COMPOSE_RAW_CMD=()
+declare -ga PM_COMPOSE_SECRET_BINDINGS=()
+declare -g PM_COMPOSE_MODEL_JSON=""
+
+pm_compose_control_file() {
+    local out_var="${1:?output variable required}"
+    local value="${PM_COMPOSE_CONTROL_FILE:-${PM_COMPOSE_FILE:-${PROJECT_ROOT:?PROJECT_ROOT required}/docker-compose.yml}}"
+    [[ "$value" == /* ]] || value="${PROJECT_ROOT}/${value#./}"
+    printf -v "$out_var" '%s' "$value"
+}
+
+pm_compose_project_directory() {
+    local out_var="${1:?output variable required}"
+    local default_directory="${PROJECT_ROOT:?PROJECT_ROOT required}"
+    [[ -z "${ENV_FILE:-}" ]] || default_directory="$(dirname -- "$ENV_FILE")"
+    local value="${PM_COMPOSE_PROJECT_DIRECTORY:-$default_directory}"
+    [[ "$value" == /* ]] || value="${PROJECT_ROOT}/${value#./}"
+    printf -v "$out_var" '%s' "$value"
+}
+
+pm_compose_override_file() {
+    local out_var="${1:?output variable required}"
+    local value="${PM_COMPOSE_OVERRIDE_FILE:-${PROJECT_ROOT:?PROJECT_ROOT required}/docker-compose.override.yml}"
+    [[ "$value" == /* ]] || value="${PROJECT_ROOT}/${value#./}"
+    printf -v "$out_var" '%s' "$value"
+}
+
+# _pm_helpers_config_dir="${PORTMASON_SHARE:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+# _pm_helpers_config_file="${_pm_helpers_config_dir}/pm-helpers-config"
+# [[ -r "$_pm_helpers_config_file" ]] \
+#     || die "Portmason configuration helper is not readable: $_pm_helpers_config_file" 2
+# # shellcheck disable=SC1090
+# . "$_pm_helpers_config_file"
+# unset _pm_helpers_config_dir _pm_helpers_config_file
+
+declare -gA PM_DEPRECATED_SECRET_ALIASES=(
+)
+
+PM_PUBLIC_KEY_LIKE_KEYS=(
+    TURNSTILE_SITE_KEY
+)
+
+pm_csv_contains() {
+    local csv="${1:-}"
+    local wanted="${2:-}"
+    local item
+    IFS=',' read -r -a _pm_csv_items <<<"$csv"
+    for item in "${_pm_csv_items[@]}"; do
+        item="${item#${item%%[![:space:]]*}}"
+        item="${item%${item##*[![:space:]]}}"
+        [[ "$item" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+pm_array_contains() {
+    local wanted="${1:?value required}"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+pm_db_has_configuration() {
+    [[ -n "${DB_PROVIDER_PLATFORM_CODE:-}" \
+        || -n "${DB_PROVIDER_CODE:-}" \
+        || -n "${DB_PLATFORM_CODE:-}" \
+        || -n "${DB_URL:-}" \
+        || -n "${DB_HOST:-}" \
+        || -n "${DB_NAME:-}" \
+        || -n "${DB_USER:-}" ]]
+}
+
+pm_db_refresh_selectors() {
+	log "pm_db_refresh_selectors: NOOP"
+
+#     local code="${DB_PROVIDER_PLATFORM_CODE:-}"
+#     local configured_provider="${DB_PROVIDER_CODE:-}"
+#     local configured_platform="${DB_PLATFORM_CODE:-}"
+#     local provider=""
+#     local platform=""
+
+#     [[ -n "$code" ]] || return 1
+
+#     if [[ "$code" == *-* ]]; then
+#         provider="${code%%-*}"
+#         platform="${code#*-}"
+#     else
+#         # Preserve the raw selector for aggregate preflight reporting without
+#         # inventing a platform or attempting to load a nonsense module name.
+#         provider="$code"
+#     fi
+
+#     if [[ -n "$configured_provider" && "$configured_provider" != "$provider" ]]; then
+#         die "DB_PROVIDER_CODE conflicts with DB_PROVIDER_PLATFORM_CODE: configured=$configured_provider derived=$provider" 2
+#         return 2
+#     fi
+#     if [[ -n "$configured_platform" && "$configured_platform" != "$platform" ]]; then
+#         die "DB_PLATFORM_CODE conflicts with DB_PROVIDER_PLATFORM_CODE: configured=$configured_platform derived=$platform" 2
+#         return 2
+#     fi
+
+# #    env_init_set DB_PROVIDER_PLATFORM_CODE "$code"
+#     env_init_set DB_PROVIDER_CODE "$provider"
+#     env_init_set DB_PLATFORM_CODE "$platform"
+#     env_init_set DB_PROVIDER "$provider"
+#     env_init_set DB_PLATFORM "$platform"
+
+#     log DEBUG "refreshed selectors" \
+#  #       "code=$DB_PROVIDER_PLATFORM_CODE" \
+#         "provider=$DB_PROVIDER_CODE" \
+#         "platform=$DB_PLATFORM_CODE"
+}
+
+
+pm_db_resolve_module() {
+    local out_var="${1:?output variable required}"
+    local module_name="${2:?module name required}"
+    local resolved=""
+
+    if [[ -r "${SCRIPT_DIR}/${module_name}" ]]; then
+        resolved="${SCRIPT_DIR}/${module_name}"
+    elif [[ -r "${PORTMASON_SHARE}/${module_name}" ]]; then
+        resolved="${PORTMASON_SHARE}/${module_name}"
+    fi
+
+    printf -v "$out_var" '%s' "$resolved"
+}
+
+pm_db_mark_module_loaded() {
+    local module_name="${1:?module name required}"
+    PM_DB_LOADED_MODULES["$module_name"]=1
+}
+
+pm_db_source_module_once() {
+    local module_name="${1:?module name required}"
+    local requirement="${2:-required}"
+    local module_file=""
+
+    [[ -z "${PM_DB_LOADED_MODULES[$module_name]+x}" ]] || return 0
+
+    pm_db_resolve_module module_file "$module_name"
+    if [[ -z "$module_file" ]]; then
+        if [[ "$requirement" == "required" ]]; then
+            die "Required Portmason module not found: $module_name" 2
+        fi
+        log DEBUG "optional module not found" "module=$module_name"
+        return 1
+    fi
+
+    log INFO "loading module" "module=$module_name" "path=$module_file"
+    # shellcheck disable=SC1090
+    . "$module_file"
+    pm_db_mark_module_loaded "$module_name"
+}
+
+pm_db_call_required() {
+    local function_name="${1:?function name required}"
+    shift
+
+    declare -F "$function_name" >/dev/null 2>&1 \
+        || die "Required database lifecycle entrypoint is not defined: $function_name" 2
+
+    log INFO "starting lifecycle entrypoint" "entrypoint=$function_name"
+    "$function_name" "$@"
+    log INFO "completed lifecycle entrypoint" "entrypoint=$function_name"
+}
+
+pm_db_call_optional() {
+    local function_name="${1:?function name required}"
+    shift
+
+    declare -F "$function_name" >/dev/null 2>&1 || return 0
+    log INFO "starting optional entrypoint" "entrypoint=$function_name"
+    "$function_name" "$@"
+    log INFO "completed optional entrypoint" "entrypoint=$function_name"
+}
+
+pm_db_bootstrap_helpers() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors || return 0
+
+    pm_db_source_module_once "pm-helpers-${DB_PROVIDER_CODE}" optional || true
+    pm_db_call_optional pm_db_provider_prepare
+}
+
+pm_db_load_helpers() {
+    local mode="${1:-required}"
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors || return 0
+
+    if [[ ! "${DB_PROVIDER_PLATFORM_CODE:-}" =~ ^[a-z0-9][a-z0-9-]*-[a-z0-9][a-z0-9-]*$ ]]; then
+        die "Invalid DB_PROVIDER_PLATFORM_CODE: ${DB_PROVIDER_PLATFORM_CODE:-<unset>}" 2
+    fi
+
+    pm_db_call_optional pm_db_provider_prepare
+}
+
+pm_db_run_provision() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors
+
+    pm_db_source_module_once "pm-provision-${DB_PLATFORM_CODE}" required
+    pm_db_call_required pm_provision_db_platform "$@"
+
+    pm_db_call_required pm_db_bridge_provision "$@"
+
+    pm_db_source_module_once "pm-provision-${DB_PROVIDER_CODE}" required
+    pm_db_call_required pm_provision_db_provider "$@"
+    pm_db_call_optional pm_db_bridge_provision_additional "$@"
+}
+
+pm_db_run_deploy() {
+    pm_db_has_configuration || return 0
+    pm_db_refresh_selectors
+
+    pm_db_source_module_once "pm-deploy-${DB_PLATFORM_CODE}" required
+    pm_db_call_required pm_deploobservabilitobservabilitobservability_db_platform "$@"
+
+    pm_db_call_required pm_db_bridge_deploy "$@"
+
+    pm_db_source_module_once "pm-deploy-${DB_PROVIDER_CODE}" required
+    pm_db_call_required pm_deploobservabilitobservabilitobservability_db_provider "$@"
+    pm_db_call_optional pm_db_bridge_deploy_additional "$@"
+}
+
+pm_compose_init_command() {
+    local compose_file override_file project_directory
+    pm_compose_control_file compose_file
+    [[ -f "$compose_file" ]] || return 1
+    pm_compose_override_file override_file
+    pm_compose_project_directory project_directory
+
+    PM_COMPOSE_RAW_CMD=(
+        python3 "${PORTMASON_SHARE}/pm-compose-encrypted.py"
+        --project-directory "$project_directory"
+        -f "$compose_file"
+    )
+    [[ ! -f "$override_file" ]] || PM_COMPOSE_RAW_CMD+=(-f "$override_file")
+
+    PM_COMPOSE_SECRET_BINDINGS=()
+    PM_COMPOSE_CMD=("${PM_COMPOSE_RAW_CMD[@]}")
+}
+
+pm_compose_render_json() {
+    [[ ${#PM_COMPOSE_RAW_CMD[@]} -gt 0 ]] || pm_compose_init_command "$@"
+
+    local binding key
+    local -a masked_secret_env=()
+    for binding in "${PM_COMPOSE_SECRET_BINDINGS[@]}"; do
+        key="${binding%%|*}"
+        masked_secret_env+=("${key}=__PORTMASON_SECRET__")
+    done
+
+    if ((${#masked_secret_env[@]} > 0)); then
+        env "${masked_secret_env[@]}" \
+            "${PM_COMPOSE_RAW_CMD[@]}" config --format json "$@"
+    else
+        "${PM_COMPOSE_RAW_CMD[@]}" config --format json "$@"
+    fi
+}
+
+pm_compose_render_failure_message() {
+    local output="${1:-}"
+    local max_lines="${2:-20}"
+
+    if [[ -z "$output" ]]; then
+        # PM-LINT-MACHINE-OUTPUT: safe-return diagnostic data.
+        printf 'docker compose config failed without diagnostic output'
+        return 0
+    fi
+
+    # PM-LINT-MACHINE-OUTPUT: data transformation for safe-return output.
+    output="$(printf '%s\n' "$output" \
+        | sed -E 's/(TOKEN|SECRET|PASSWORD|PASS|KEY)=([^[:space:]]+)/\1=***REDACTED***/g' \
+        | sed -E 's/(token|secret|password|pass|key):[[:space:]]*[^[:space:]]+/\1: ***REDACTED***/g' \
+        | tail -n "$max_lines")"
+
+    # PM-LINT-MACHINE-OUTPUT: safe-return diagnostic data.
+    printf '%s' "$output"
+}
+
+# pm_config_write_local_files() (
+#     declare -F pm_compose_load_model >/dev/null 2>&1 \
+#         || die "pm-config-local requires pm-helpers-db" 2
+#     # Bootstrap service discovery without reading files we are about to generate.
+#     # This subshell keeps the discovery model out of the caller's cache.
+#     PM_COMPOSE_MODEL_JSON=""
+#     PROJECT_SERVICES=""
+#     pm_compose_init_command --no-env-resolution || return 1
+#     PM_COMPOSE_MODEL_JSON="$(pm_compose_render_json --no-env-resolution)" || return 1
+#     pm_compose_load_model || return 1
+
+#     # These infrastructure services have registries outside the base registry.
+#     local entity registry function_name
+#     for entity in traefik cloudflared; do
+#         if jq -e --arg entity "$entity" \
+#             'any(.[]; .service == $entity or .role == $entity)' \
+#             <<<"$PROJECT_SERVICES" >/dev/null; then
+#             registry="${PORTMASON_SHARE}/pm-config-${entity}"
+#             [[ -r "$registry" ]] || die "Missing configuration registry: $registry" 2
+#             . "$registry"
+#             function_name="pm_config_${entity}"
+#             declare -F "$function_name" >/dev/null \
+#                 || die "Missing configuration registration function: $function_name" 2
+#             PM_CONFIG_ACTIVE_ENTITY="$entity" "$function_name"
+#         fi
+#     done
+#     pm_config_validate_registry
+
+#     local output_dir="${PM_CONFIG_OUTPUT_DIR:-${SCRIPT_DIR:-$PWD}/.portmason/config}"
+#     local manifest="${output_dir}/manifest.tsv"
+#     local tmp service role scopes
+#     mkdir -p -- "$output_dir"
+#     tmp="$(mktemp "${manifest}.XXXXXX")"
+#     chmod 600 "$tmp"
+#     printf 'service\trole\tconfig_scopes\n' >"$tmp"
+
+#     while IFS=$'\t' read -r service role _image _has_build; do
+#         [[ -n "$service" ]] || continue
+#         pm_config_write_service_env_file "$service" "$role"
+#         pm_config_compose_service_scopes scopes "$service" "$role"
+#         printf '%s\t%s\t%s\n' "$service" "$role" "$scopes" >>"$tmp"
+#     done < <(jq -r '.[] | [.service,.role,.image,(.has_build|tostring)] | @tsv' \
+#         <<<"${PROJECT_SERVICES:-[]}")
+
+#     mv -- "$tmp" "$manifest"
+#     chmod 600 "$manifest"
+#     log INFO "pm-config: local service environments complete" "directory=$output_dir"
+# )
+
+pm_compose_load_model() {
+    if [[ -n "${PM_COMPOSE_MODEL_JSON:-}" \
+        && -n "${PROJECT_SERVICES:-}" \
+        && "$(jq -r 'length' <<<"$PROJECT_SERVICES" 2>/dev/null || printf 0)" -gt 0 ]]; then
+        return 0
+    fi
+
+    have jq || {
+        log ERROR "jq is required to inspect the Compose model"
+        return 1
+    }
+
+    if [[ -n "${PM_COMPOSE_MODEL_JSON:-}" ]] \
+        && ! jq -e '.services and ((.services | length) > 0)' >/dev/null 2>&1 \
+            <<<"$PM_COMPOSE_MODEL_JSON"; then
+        PM_COMPOSE_MODEL_JSON=""
+    fi
+
+    if [[ -z "${PM_COMPOSE_MODEL_JSON:-}" ]]; then
+        have docker || {
+            log ERROR "Docker with Compose v2 is required"
+            return 1
+        }
+
+        pm_compose_init_command || return 0
+        local compose_render_output compose_render_rc=0 compose_render_detail
+        local compose_render_stderr
+        compose_render_stderr="$(mktemp)"
+        compose_render_output="$(pm_compose_render_json 2>"$compose_render_stderr")" \
+            || compose_render_rc=$?
+        if ((compose_render_rc != 0)); then
+            PM_COMPOSE_MODEL_JSON=""
+            compose_render_detail="$(pm_compose_render_failure_message "$(<"$compose_render_stderr") $compose_render_output")"
+            rm -f -- "$compose_render_stderr"
+            log ERROR "Compose model could not be rendered" \
+                "command=${PM_COMPOSE_CMD[*]} config --format json" \
+                "detail=${compose_render_detail}"
+            return 1
+        fi
+        if [[ -s "$compose_render_stderr" ]]; then
+            log WARN "Compose rendered with diagnostics" \
+                "detail=$(pm_compose_render_failure_message "$(<"$compose_render_stderr")" 5)"
+        fi
+        rm -f -- "$compose_render_stderr"
+	        PM_COMPOSE_MODEL_JSON="$compose_render_output"
+        export PM_COMPOSE_MODEL_JSON
+    fi
+
+    if ! jq -e '.services and (.services | type == "object")' >/dev/null 2>&1 \
+        <<<"$PM_COMPOSE_MODEL_JSON"; then
+        log ERROR "Rendered Compose model is not valid service JSON" \
+            "detail=$(pm_compose_render_failure_message "$PM_COMPOSE_MODEL_JSON" 10)"
+        return 1
+    fi
+
+    PROJECT_SERVICES="$(
+        jq -c '
+            def labels($svc): ($svc.labels // {});
+            def environment($svc): ($svc.environment // {});
+            def depends($svc):
+                if (($svc.depends_on // {}) | type) == "array"
+                then ($svc.depends_on // [])
+                else (($svc.depends_on // {}) | keys)
+                end;
+            def command_text($svc):
+                [($svc.entrypoint // []), ($svc.command // [])]
+                | flatten
+                | map(tostring)
+                | join(" ");
+            def schedules($svc):
+                [environment($svc)
+                 | to_entries[]
+                 | select(.key | startswith("SCHEDULE_"))
+                 | (.value | tostring) as $spec
+                 | select($spec | contains("|"))
+                 | ($spec | index("|")) as $split
+                 | {
+                     name: (.key[9:] | ascii_downcase | gsub("_"; "-")),
+                     cron: $spec[0:$split],
+                     command: $spec[($split + 1):]
+                   }];
+            def is_queue($name; $svc):
+                $name == "queue"
+                or (($svc.image // "") | test("(^|/)(rabbitmq|nats|redis)(:|@|$)"; "i"));
+            def inferred_role($name; $svc):
+                (labels($svc)["solutions.etal.service"] // "") as $declared
+                | if $declared != "" then ($declared | ascii_downcase)
+                  elif is_queue($name; $svc) then "queue"
+                  elif $name == "scheduler"
+                    or ((schedules($svc) | length) > 0)
+                    or (command_text($svc) | test("(^|/)supercronic( |$)"))
+                  then "scheduler"
+                  elif $name == "worker"
+                    or (command_text($svc) | test("worker\\.(js|py)( |$)"))
+                  then "worker"
+                  else ($name | ascii_downcase)
+                  end;
+            .services as $services
+            | ($services
+               | to_entries
+               | map(select(is_queue(.key; .value)))
+               | .[0].key // "") as $queue
+            | $services
+            | to_entries
+            | map(
+                .value as $svc
+                | inferred_role(.key; $svc) as $role
+                | (labels($svc)["solutions.etal.queue.publish"] // "") as $declared_publish
+                | (labels($svc)["solutions.etal.queue.consume"] // "") as $declared_consume
+                | {
+                    service: .key,
+                    role: $role,
+                    image: ($svc.image // ""),
+                    has_build: ($svc.build != null),
+                    command: ($svc.command // []),
+                    entrypoint: ($svc.entrypoint // []),
+                    environment: environment($svc),
+                    run_command: (labels($svc)["solutions.etal.run.command"] // ""),
+                    run_args: (labels($svc)["solutions.etal.run.args"] // ""),
+                    queue_publish: (
+                      if $declared_publish != "" then $declared_publish
+                      elif $queue != "" and (depends($svc) | index($queue)) != null and $role != "queue" and $role != "worker"
+                      then $queue
+                      else ""
+                      end
+                    ),
+                    queue_consume: (
+                      if $declared_consume != "" then $declared_consume
+                      elif $queue != "" and (depends($svc) | index($queue)) != null and $role == "worker"
+                      then $queue
+                      else ""
+                      end
+                    ),
+                    queue_delivery: (labels($svc)["solutions.etal.queue.delivery"] // ""),
+                    queue_path: (labels($svc)["solutions.etal.queue.path"] // ""),
+                    observability_component: (labels($svc)["solutions.etal.observability.component"] // ""),
+                    observability_capability: (labels($svc)["solutions.etal.observability.capability"] // ""),
+                    observability_component: (labels($svc)["solutions.etal.observability.component"] // ""),
+                    observability_capability: (labels($svc)["solutions.etal.observability.capability"] // ""),
+                    secret_keys: (
+                      (labels($svc)["solutions.etal.secrets"] // "")
+                      | split(",")
+                      | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+                      | map(select(length > 0))
+                    ),
+                    queue_engine: (
+                      (labels($svc)["solutions.etal.queue.engine"] // "") as $declared_engine
+                      | if $declared_engine != "" then $declared_engine
+                        elif $role == "queue" and (($svc.image // "") | test("rabbitmq"; "i")) then "rabbitmq"
+                        elif $role == "queue" and (($svc.image // "") | test("nats"; "i")) then "nats"
+                        elif $role == "queue" and (($svc.image // "") | test("redis"; "i")) then "redis"
+                        else ""
+                        end
+                    ),
+                    schedules: schedules($svc),
+                    schedule_cron: (labels($svc)["solutions.etal.schedule.cron"] // ""),
+                    schedule_timezone: (
+                      labels($svc)["solutions.etal.schedule.timezone"]
+                      // environment($svc).TZ
+                      // "Etc/UTC"
+                    ),
+                    depends_on: depends($svc)
+                  }
+              )
+        ' <<<"$PM_COMPOSE_MODEL_JSON"
+    )"
+
+    export PROJECT_SERVICES
+
+    # log INFO "discovered project services count=$(jq 'length' <<<"$PROJECT_SERVICES") roles=$(jq -r 'map(.role) | unique | join(",")' <<<"$PROJECT_SERVICES")"
+}
+
+pm_compose_role_exists() {
+    local role="${1:?role required}"
+    [[ -n "${PROJECT_SERVICES:-}" ]] || return 1
+    jq -e --arg role "$role" 'any(.[]; .role == $role)' >/dev/null 2>&1 \
+        <<<"$PROJECT_SERVICES"
+}
+
+pm_compose_service_for_role() {
+    local role="${1:?role required}"
+    [[ -n "${PROJECT_SERVICES:-}" ]] || return 1
+    jq -r --arg role "$role" '.[] | select(.role == $role) | .service' \
+        <<<"$PROJECT_SERVICES" | head -n 1
+}
+
+pm_compose_role_for_service() {
+    local service="${1:?service required}"
+    jq -r --arg service "$service" '.[] | select(.service == $service) | .role' \
+        <<<"${PROJECT_SERVICES:-[]}" | head -n 1
+}
+
+pm_compose_deployable_services_tsv() {
+    jq -r 'sort_by(if .has_build then 0 else 1 end) | .[]
+        | select(
+            .role != "db"
+            and .role != "cache"
+            and .role != "queue"
+            and .role != "log-init"
+            and .role != "inbound-init"
+            and .role != "proxy"
+            and .observability_component == ""
+            and .observability_component == ""
+        )
+        | select(.has_build or (.image | length > 0))
+        | [.service, .role, .image, (.has_build | tostring)]
+        | @tsv' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+pm_compose_observability_service_tsv() {
+    local component="${1:?observability component required}"
+    jq -r --arg component "$component" '.[]
+        | select(.observability_component == $component)
+        | select(.has_build or (.image | length > 0))
+        | [.service, .role, .image, (.has_build | tostring)]
+        | @tsv' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+pm_compose_observability_service_tsv() {
+    local component="${1:?observability component required}"
+    jq -r --arg component "$component" '.[]
+        | select(.observability_component == $component)
+        | select(.has_build or (.image | length > 0))
+        | [.service, .role, .image, (.has_build | tostring)]
+        | @tsv' <<<"${PROJECT_SERVICES:-[]}"
+}
+
+
+
+
+
+
+
+
+
+pm_secret_key_is_canonical() {
+    local key="${1:?key required}"
+    pm_array_contains "$key" "${PM_CANONICAL_SECRET_KEYS[@]}"
+}
+
+pm_secret_key_is_deprecated_alias() {
+    local key="${1:?key required}"
+    [[ -n "${PM_DEPRECATED_SECRET_ALIASES[$key]+x}" ]]
+}
+
+pm_secret_key_is_public_exception() {
+    local key="${1:?key required}"
+    pm_array_contains "$key" "${PM_PUBLIC_KEY_LIKE_KEYS[@]}"
+}
+
+pm_secret_key_is_registered() {
+    local key="${1:?key required}"
+    pm_secret_key_is_canonical "$key" \
+        || pm_secret_key_is_deprecated_alias "$key" \
+        || pm_csv_contains "${PM_ADDITIONAL_SECRET_KEYS:-}" "$key"
+}
+
+pm_load_generated_environment() {
+    local caller="${1:-Portmason}"
+    local mode="${2:-once}"
+    local base="${ENV_FILE:-${SCRIPT_DIR:-${PROJECT_ROOT:-$PWD}}/.env}"
+    local file="${base}.generated"
+    local resolved=""
+
+    if [[ ! -r "$file" ]]; then
+        log DEBUG "${caller}: generated environment is not readable; continuing with current process values" \
+            "file=$file"
+        return 0
+    fi
+
+    resolved="$(realpath -- "$file" 2>/dev/null || printf '%s' "$file")"
+    if [[ "$mode" != force \
+        && "${PM_GENERATED_ENV_FILE_LOADED:-}" == "$resolved" ]]; then
+        log DEBUG "${caller}: generated environment already loaded" \
+            "file=$file"
+        return 0
+    fi
+
+    log INFO "${caller}: loading fully interpolated generated environment" \
+        "file=$file"
+    local pm_reader_plaintext
+    pm_decrypt_file "$file" pm_reader_plaintext || return 2
+    set -a
+    eval "$pm_reader_plaintext" || {
+        set +a
+        unset pm_reader_plaintext
+        return 2
+    }
+    set +a
+    unset pm_reader_plaintext
+
+    PM_GENERATED_ENV_FILE_LOADED="$resolved"
+    export PM_GENERATED_ENV_FILE_LOADED
+    log INFO "${caller}: generated environment loaded" \
+        "file=$file"
+}
+
+pm_env_generated_keys() {
+    local file="${ENV_FILE:-${SCRIPT_DIR}/.env}.generated"
+    [[ -r "$file" ]] || return 0
+    local pm_reader_plaintext
+    pm_decrypt_file "$file" pm_reader_plaintext || return 2
+    awk '
+        /^[A-Za-z_][A-Za-z0-9_]*=/ {
+            key=$0
+            sub(/=.*/, "", key)
+            print key
+        }
+    ' <<< "$pm_reader_plaintext"
+}
+
+pm_generated_env_upsert() {
+    local content_name="${1:?content variable name required}"
+    local key="${2:?key required}"
+    local value="${3-}"
+    local filtered
+
+    [[ "${DEPLOY_ENV:-dev}" == "dev" ]] || return 0
+
+    [[ "$content_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || { die "invalid generated environment memory reference" 2; return 2; }
+
+    # Prevent collisions with this function's local variables.
+    case "$content_name" in
+        content_name|content_ref|key|value|filtered)
+            die "generated environment memory reference conflicts with a local variable" 2
+            return 2
+            ;;
+    esac
+
+    local -n content_ref="$content_name"
+
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || { die "invalid generated environment key: $key" 2; return 2; }
+
+    # .env.generated is consumed by both Portmason and Docker Compose.
+    # Persist derived values as single-quoted dotenv literals, rather than
+    # Bash printf %q encoding, which Compose can interpret literally.
+    case "$value" in
+        *$'\n'*|*$'\r'*)
+            die "refusing multiline value in generated environment" 2
+            return 2
+            ;;
+        *"'"*)
+            die "derived generated value contains an unsupported single quote" 2
+            return 2
+            ;;
+    esac
+
+    filtered="$(
+        printf '%s\n' "${content_ref-}" |
+            awk -F= -v wanted="$key" '$1 != wanted {print}'
+    )" || return 2
+
+    # PM-LINT-MACHINE-OUTPUT: exact dotenv persistence format.
+    printf -v content_ref "%s%s%s='%s'\n" \
+        "$filtered" "${filtered:+$'\n'}" "$key" "$value" || return 2
+
+    log DEBUG "updated generated development environment in memory" \
+        "key=$key" "encoding=dotenv-literal"
+}
+
+pm_db_publish_generated_contract() {
+    [[ "${DEPLOY_ENV:-dev}" == "dev" ]] || return 0
+
+	local file="${ENV_FILE}.generated"
+	local generated_content="" tmp key
+
+	# Decrypt once. A failure leaves the original file untouched.
+	if [[ -s "$file" ]]; then
+		generated_content="$(
+			sops --decrypt \
+				--input-type dotenv --output-type dotenv "$file"
+		)" || return 2
+	fi
+
+	# DB_PASSWORD is owned by the operator-authored .env and config renderer.
+	# This step updates only canonical selectors and bridge-derived values.
+	for key in \
+		DB_PROVIDER_PLATFORM_CODE \
+		DB_USER_HOST DB_ADMIN_HOST DB_PORT DB_NAME \
+		DB_USER DB_ADMIN_USER DB_URL DB_DIRECT_URL
+	do
+		[[ -v "$key" ]] || continue
+		pm_generated_env_upsert generated_content "$key" "${!key}" || {
+			unset generated_content
+			return 2
+		}
+	done
+
+	tmp="$(mktemp "${file}.XXXXXX")" || {
+		unset generated_content
+		return 2
+	}
+
+	# Only encrypted output is written to disk.
+	if ! printf '%s\n' "$generated_content" |
+		sops --encrypt \
+			--input-type dotenv --output-type dotenv \
+			--filename-override "$file" /dev/stdin >"$tmp"
+	then
+		rm -f -- "$tmp"
+		unset generated_content
+		return 2
+	fi
+
+	unset generated_content
+
+	chmod --reference="$file" "$tmp" 2>/dev/null ||
+		chmod 600 "$tmp" || {
+			rm -f -- "$tmp"
+			return 2
+		}
+
+	mv -- "$tmp" "$file" || {
+		rm -f -- "$tmp"
+		return 2
+	}
+
+	log INFO "published canonical database contract to development runtime environment" \
+		"file=$file" "encoding=sops-dotenv"
+}

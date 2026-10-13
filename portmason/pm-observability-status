@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers-observability" --read-only
+
+[[ "${OBSERVABILITY_STORE_PLATFORM_CODE:-}" == local ]] \
+    || die "pm-observability-status currently supports the local adapter" 2
+
+pm_observability_load_compose_model
+services=(store log-ingest)
+if observability_is_true "${OBSERVABILITY_DASHBOARD_ENABLED:-false}"; then
+    services+=(dashboard)
+fi
+pm_observability_local_compose ps "${services[@]}"

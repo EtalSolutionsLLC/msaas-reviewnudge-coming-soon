@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SOURCE_DIR="${1:-.}"
+OUTPUT_FILE="${2:-combined.txt}"
+
+: > "$OUTPUT_FILE"
+
+find "$SOURCE_DIR" \
+  -type f \
+  ! -path "*/.git/*" \
+  ! -path "*/node_modules/*" \
+  ! -path "*/dist/*" \
+  ! -path "*/build/*" \
+  ! -path "*/coverage/*" \
+  | sort | while read -r file; do
+
+    echo "================================================================================" >> "$OUTPUT_FILE"
+    echo "FILE: $file" >> "$OUTPUT_FILE"
+    echo "================================================================================" >> "$OUTPUT_FILE"
+
+    cat "$file" >> "$OUTPUT_FILE" 2>/dev/null || \
+        echo "[Unable to read file]" >> "$OUTPUT_FILE"
+
+    printf "\n\n" >> "$OUTPUT_FILE"
+done
+
+echo "Combined contents written to: $OUTPUT_FILE"

@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+pm_provision_db_platform() {
+    [[ "${DB_PLATFORM_CODE:-}" == "local" ]] \
+        || die "pm-provision-db-local requires DB_PLATFORM_CODE=local" 2
+
+    : "${DB_NAME:?DB_NAME required}"
+    : "${DB_USER:?DB_USER required}"
+    : "${DB_USER_PASSWORD:?DB_USER_PASSWORD required}"
+
+    pm_compose_load_model
+
+    local service
+    service="$(pm_compose_service_for_role db)"
+    [[ -n "$service" ]] \
+        || die "pm-provision-db-local: no Compose db service was found" 2
+
+    env_init_set PM_DB_SERVICE "$service"
+    env_init_set DB_HOST "${DB_HOST:-$service}"
+    env_init_set DB_PORT "${DB_PORT:-5432}"
+    env_init_set DB_ADMIN_USER "${DB_ADMIN_USER:-$DB_ADMIN_USER}"
+    env_init_set DB_ADMIN_PASSWORD "${DB_ADMIN_PASSWORD:-$DB_ADMIN_PASSWORD}"
+
+    local url
+	local_db_build_url \
+        url \
+        "$DB_HOST" \
+        "$DB_PORT" \
+        "$DB_NAME" \
+        "$DB_ADMIN_USER" \
+        "$DB_ADMIN_PASSWORD" \
+        "${DB_SSL_MODE:-disable}"
+
+    env_init_set DB_URL "$url"
+    env_init_set DB_DIRECT_URL "$url"
+    pm_db_publish_generated_contract
+
+    log INFO "pm-provision-db-local: starting database service" \
+        "service=$service"
+
+    "${PM_COMPOSE_CMD[@]}" up -d "$service"
+
+    local attempt
+    local max_attempts="${PM_DB_READY_ATTEMPTS:-30}"
+    local wait_seconds="${PM_DB_READY_INTERVAL_SECONDS:-1}"
+
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        if "${PM_COMPOSE_CMD[@]}" exec -T "$service" \
+            pg_isready \
+                --host localhost \
+                --port "$DB_PORT" \
+                --username "$DB_ADMIN_USER" \
+                >/dev/null 2>&1; then
+            log INFO "pm-provision-db-local: database service ready" \
+                "service=$service" \
+                "attempt=$attempt"
+            break
+        fi
+
+        if (( attempt == max_attempts )); then
+            log ERROR "pm-provision-db-local: database service readiness failed" \
+                "service=$service" \
+                "attempts=$max_attempts"
+
+            "${PM_COMPOSE_CMD[@]}" ps "$service" >&2 || true
+            "${PM_COMPOSE_CMD[@]}" logs --tail 100 "$service" >&2 || true
+
+            die "pm-provision-db-local: database service did not become ready: $service" 2
+        fi
+
+        sleep "$wait_seconds"
+    done
+
+    log INFO "pm-provision-db-local: database platform ready" \
+        "service=$service" \
+        "host=$DB_HOST" \
+        "port=$DB_PORT"
+}
+
+main() {
+    pm_provision_db_platform "$@"
+}
+
+main "$@"

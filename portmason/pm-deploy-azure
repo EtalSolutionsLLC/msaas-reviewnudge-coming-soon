@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+pm_azure_build_service_image() {
+    local service="${1:?service required}"
+    local has_build="${2:-false}"
+    if [[ "$has_build" == "true" ]]; then
+        log INFO "building Compose service image" "service=$service"
+        "${PM_COMPOSE_CMD[@]}" build "$service"
+    fi
+}
+
+pm_azure_publish_service_image() {
+    local service="${1:?service required}"
+    local source_image="${2:?source image required}"
+    local out_var="${3:?output variable required}"
+    local resource login_server tag target digest
+
+    resource_name resource "$service"
+    pm_azure_acr_login_server login_server
+    tag="${PM_IMAGE_TAG:-${BUILD_NUMBER:-$(date -u +%Y%m%d-%H%M%S)}}"
+    target="${login_server}/${resource}:${tag}"
+
+    docker image inspect "$source_image" >/dev/null 2>&1 \
+        || die "Compose service image is not available locally: $source_image" 2
+    docker tag "$source_image" "$target"
+    log INFO "pushing service image to Azure Container Registry" \
+        "service=$service" "image=$target"
+    docker push "$target" >/dev/null
+
+    digest="$(pm_azure_cli acr repository show \
+        --name "$AZURE_ACR_NAME" \
+        --image "${resource}:${tag}" \
+        --query digest \
+        -o tsv \
+        --only-show-errors)"
+    [[ -n "$digest" ]] || die "Unable to resolve immutable ACR digest for $target" 2
+    printf -v "$out_var" '%s' "${login_server}/${resource}@${digest}"
+}
+
+pm_azure_service_model_json() {
+    local service="${1:?service required}"
+    local role="${2:?role required}"
+    local image="${3:?image required}"
+    local resource env_json secrets_json command_json args_json schedule target_port
+    local external_ingress=false min_replicas=1 max_replicas=1
+
+    resource_name resource "$service"
+    env_json="$(pm_azure_service_env_json "$service" "$role")"
+    secrets_json="$(pm_azure_service_secrets_json "$service" "$role")"
+    command_json="$(pm_azure_service_command_json "$service")"
+    args_json="$(pm_azure_service_args_json "$service")"
+    schedule="$(jq -r --arg service "$service" \
+        '.[] | select(.service == $service) | .schedule_cron // empty' \
+        <<<"${PROJECT_SERVICES:-[]}")"
+    target_port="$(jq -r --arg service "$service" --arg fallback "${PORT:-8080}" '
+        .[] | select(.service == $service) |
+        (.target_port // .port // ($fallback | tonumber))
+    ' <<<"${PROJECT_SERVICES:-[]}")"
+
+    case "$role" in
+        web|app)
+            external_ingress=true
+            min_replicas="${AZURE_APP_MIN_REPLICAS:-1}"
+            max_replicas="${AZURE_APP_MAX_REPLICAS:-3}"
+            ;;
+        worker)
+            min_replicas="${AZURE_WORKER_MIN_REPLICAS:-1}"
+            max_replicas="${AZURE_WORKER_MAX_REPLICAS:-1}"
+            ;;
+        scheduler)
+            min_replicas=1
+            max_replicas=1
+            ;;
+        jobs)
+            min_replicas=0
+            max_replicas=0
+            ;;
+    esac
+
+    jq -cn \
+        --arg name "$resource" \
+        --arg sourceService "$service" \
+        --arg role "$role" \
+        --arg image "$image" \
+        --arg schedule "$schedule" \
+        --argjson targetPort "$target_port" \
+        --argjson externalIngress "$external_ingress" \
+        --argjson minReplicas "$min_replicas" \
+        --argjson maxReplicas "$max_replicas" \
+        --argjson cpu "${AZURE_CONTAINER_CPU:-0.5}" \
+        --arg memory "${AZURE_CONTAINER_MEMORY:-1Gi}" \
+        --argjson env "$env_json" \
+        --argjson secrets "$secrets_json" \
+        --argjson command "$command_json" \
+        --argjson args "$args_json" \
+        '{
+          name:$name,
+          sourceService:$sourceService,
+          role:$role,
+          image:$image,
+          targetPort:$targetPort,
+          externalIngress:$externalIngress,
+          minReplicas:$minReplicas,
+          maxReplicas:$maxReplicas,
+          cpu:$cpu,
+          memory:$memory,
+          env:$env,
+          secrets:$secrets,
+          command:$command,
+          args:$args,
+          schedule:$schedule
+        }'
+}
+
+pm_azure_application_parameter_file() {
+    local out_var="${1:?output variable required}"
+    local services_json="${2:?services JSON required}"
+    local work_dir file
+
+    work_dir="${SCRIPT_DIR}/.portmason/azure"
+    mkdir --parents -- "$work_dir"
+    file="${work_dir}/application.parameters.json"
+
+    jq -n \
+        --arg containerEnvironmentId "${AZURE_CONTAINER_ENV_ID:?AZURE_CONTAINER_ENV_ID required}" \
+        --arg identityId "${AZURE_IDENTITY_ID:?AZURE_IDENTITY_ID required}" \
+        --arg acrLoginServer "${AZURE_ACR_LOGIN_SERVER:?AZURE_ACR_LOGIN_SERVER required}" \
+        --argjson services "$services_json" \
+        --argjson jobReplicaTimeout "${AZURE_JOB_REPLICA_TIMEOUT_SECONDS:-1800}" \
+        --argjson jobReplicaRetryLimit "${AZURE_JOB_REPLICA_RETRY_LIMIT:-1}" \
+        --argjson jobParallelism "${AZURE_JOB_PARALLELISM:-1}" \
+        --argjson jobCompletionCount "${AZURE_JOB_COMPLETION_COUNT:-1}" \
+        '{
+          "$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+          contentVersion:"1.0.0.0",
+          parameters:{
+            containerEnvironmentId:{value:$containerEnvironmentId},
+            identityId:{value:$identityId},
+            acrLoginServer:{value:$acrLoginServer},
+            services:{value:$services},
+            jobReplicaTimeout:{value:$jobReplicaTimeout},
+            jobReplicaRetryLimit:{value:$jobReplicaRetryLimit},
+            jobParallelism:{value:$jobParallelism},
+            jobCompletionCount:{value:$jobCompletionCount}
+          }
+        }' > "$file"
+
+    printf -v "$out_var" '%s' "$file"
+}
+
+pm_azure_persist_application_outputs() {
+    local deployment_name="${1:?deployment name required}"
+    local output app_url
+
+    output="$(pm_azure_cli deployment group show \
+        --resource-group "$AZURE_RESOURCE_GROUP" \
+        --name "$deployment_name" \
+        --query properties.outputs \
+        -o json \
+        --only-show-errors)"
+    app_url="$(jq -r '.applicationUrls.value[0] // empty' <<<"$output")"
+    if [[ -n "$app_url" ]]; then
+        env_init_set ALTERNATE_APP_URL "$app_url"
+        env_init_set APP_URL "$app_url"
+    fi
+}
+
+pm_deploy_runtime_platform() {
+    have docker || die "Missing required command: docker" 2
+    have jq || die "Missing required command: jq" 2
+    pm_azure_cli_require_account
+    pm_azure_defaults
+    pm_compose_load_model
+    [[ ${#PM_COMPOSE_CMD[@]} -gt 0 ]] || pm_compose_init_command
+    [[ "$(jq -r 'length' <<<"${PROJECT_SERVICES:-[]}")" -gt 0 ]] \
+        || die "Azure deployment discovered zero Compose services; refusing false-success deployment" 2
+
+    local bicep_root template parameter_file deployment_name
+    local login_server service role configured_image has_build source_image target_image
+    local models_file services_json
+    pm_azure_bicep_root bicep_root
+    template="${bicep_root}/application.bicep"
+    [[ -r "$template" ]] || die "Azure application Bicep template is unavailable: $template" 2
+
+    pm_azure_acr_login_server login_server
+    pm_azure_cli acr login --name "$AZURE_ACR_NAME" --only-show-errors >/dev/null
+    sync_runtime_secrets
+
+    models_file="$(mktemp)"
+    while IFS=$'\t' read -r service role configured_image has_build; do
+        [[ -n "$service" ]] || continue
+        compose_image_for_service source_image "$service" "$configured_image"
+        pm_azure_build_service_image "$service" "$has_build"
+        pm_azure_publish_service_image "$service" "$source_image" target_image
+        pm_azure_service_model_json "$service" "$role" "$target_image" >> "$models_file"
+    done < <(pm_compose_deployable_services_tsv)
+    services_json="$(jq -s '.' "$models_file")"
+    rm -f -- "$models_file"
+
+    [[ "$(jq -r 'length' <<<"$services_json")" -gt 0 ]] \
+        || die "Azure deployment produced an empty application model" 2
+
+    pm_azure_application_parameter_file parameter_file "$services_json"
+    pm_azure_deployment_name deployment_name application
+
+    log INFO "starting declarative Azure application deployment" \
+        "resource_group=$AZURE_RESOURCE_GROUP" \
+        "deployment=$deployment_name" \
+        "services=$(jq -r 'length' <<<"$services_json")"
+
+    pm_azure_cli bicep build \
+        --file "$template" \
+        --only-show-errors >/dev/null
+
+    pm_azure_cli deployment group validate \
+        --resource-group "$AZURE_RESOURCE_GROUP" \
+        --name "$deployment_name" \
+        --template-file "$template" \
+        --parameters "@$parameter_file" \
+        --only-show-errors >/dev/null
+
+    if pm_azure_bool_enabled "${AZURE_BICEP_WHAT_IF:-true}"; then
+        pm_azure_cli deployment group what-if \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$deployment_name" \
+            --template-file "$template" \
+            --parameters "@$parameter_file" \
+            --only-show-errors
+    fi
+
+    pm_azure_cli deployment group create \
+        --resource-group "$AZURE_RESOURCE_GROUP" \
+        --name "$deployment_name" \
+        --template-file "$template" \
+        --parameters "@$parameter_file" \
+        --only-show-errors >/dev/null
+
+    pm_azure_persist_application_outputs "$deployment_name"
+
+    log INFO "declarative Azure application deployment complete" \
+        "alternate_app_url=${ALTERNATE_APP_URL:-<not-applicable>}"
+}
+
+main() {
+    pm_deploy_runtime_platform "$@"
+}
+
+main "$@"

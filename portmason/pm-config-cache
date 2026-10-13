@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_cache() {
+    pm_config_register CACHE_HOST var 'cache,web,app,jobs,worker' CACHE_HOST optional
+    pm_config_register CACHE_PORT var 'cache,web,app,jobs,worker' CACHE_PORT optional
+    pm_config_register CACHE_PASSWORD secret 'cache,web,app,jobs,worker' CACHE_PASSWORD optional
+}

@@ -1,0 +1,490 @@
+#!/usr/bin/env bash
+
+# Shared helpers for web-facing Portmason runtimes.
+#
+# This file is not selected directly by RUNTIME_CODE.
+# Runtime-specific helper libraries such as:
+#
+#   pm-helpers-node
+#   pm-helpers-static
+#
+# source it explicitly.
+
+
+pm_web_site_root() {
+    printf '%s\n' \
+        "${SITE_ROOT:-${SITE_DIR:-${PROJECT_ROOT:-$PWD}/public}}"
+}
+
+
+pm_web_content_root() {
+    printf '%s\n' \
+        "${PROJECT_ROOT:-$PWD}/content"
+}
+
+
+
+pm_web_install_consent_assets() {
+    local site_root
+    local relative
+    local source
+    local target
+
+    site_root="$(
+        pm_web_site_root
+    )"
+
+    for relative in \
+        "assets/css/pm-web-analytics.css" \
+        "assets/js/pm-web-analytics.js" \
+		"assets/icons/cookie-preferences.png"
+    do
+        source="${PORTMASON_SHARE}/web/base/${relative}"
+        target="${site_root}/${relative}"
+
+        [[ -r "$source" ]] || {
+            die \
+                "Portmason web consent asset is unavailable: $source" \
+                2
+
+            return 2
+        }
+
+        if [[ ! -r "$target" ]] \
+            || ! cmp -s \
+                -- \
+                "$source" \
+                "$target"
+        then
+            install \
+                -D \
+                -m 0644 \
+                -- \
+                "$source" \
+                "$target"
+
+            log INFO \
+                "web consent asset synchronized" \
+                "target=$target"
+        fi
+    done
+}
+
+pm_web_validate_locale_catalogs() {
+    local content_root
+    local baseline_locale
+
+    content_root="$(
+        pm_web_content_root
+    )"
+
+    baseline_locale="${DEFAULT_LOCALE:-en-US}"
+
+
+    if [[ ! -f "${content_root}/locales.json" ]] \
+        || [[ ! -d "${content_root}/${baseline_locale}" ]]
+    then
+        log INFO \
+            "locale catalog structural validation skipped" \
+            "content_root=$content_root" \
+            "baseline_locale=$baseline_locale"
+
+        return 0
+    fi
+
+
+    python3 - \
+        "$content_root" \
+        "$baseline_locale" <<'PY'
+from pathlib import Path
+
+import json
+import re
+import sys
+
+
+content_root = Path(
+    sys.argv[1]
+).resolve()
+
+baseline_locale = sys.argv[2]
+
+
+placeholder_re = re.compile(
+    r"\{\{[^{}]+\}\}"
+    r"|"
+    r"\{[A-Za-z0-9_]+\}"
+)
+
+html_tag_re = re.compile(
+    r"</?[^>]+>"
+)
+
+
+def load_catalog(locale):
+    catalog = {}
+
+    directory = (
+        content_root
+        / locale
+    )
+
+    for path in sorted(
+        directory.glob("*.json")
+    ):
+        catalog[path.stem] = json.loads(
+            path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+    if not catalog:
+        raise SystemExit(
+            f"No locale catalog files found in {directory}"
+        )
+
+    return catalog
+
+
+def leaf_values(
+    value,
+    prefix="",
+):
+    leaves = {}
+
+    if isinstance(
+        value,
+        dict,
+    ):
+        for key, child in value.items():
+            path = (
+                f"{prefix}.{key}"
+                if prefix
+                else key
+            )
+
+            leaves.update(
+                leaf_values(
+                    child,
+                    path,
+                )
+            )
+
+    elif isinstance(
+        value,
+        list,
+    ):
+        for index, child in enumerate(
+            value
+        ):
+            leaves.update(
+                leaf_values(
+                    child,
+                    f"{prefix}[{index}]",
+                )
+            )
+
+    else:
+        leaves[prefix] = value
+
+    return leaves
+
+
+def validate_catalog(
+    locale,
+    catalog,
+    baseline,
+):
+    expected = leaf_values(
+        baseline
+    )
+
+    actual = leaf_values(
+        catalog
+    )
+
+
+    if set(actual) != set(expected):
+        missing = sorted(
+            set(expected)
+            - set(actual)
+        )
+
+        extra = sorted(
+            set(actual)
+            - set(expected)
+        )
+
+        raise SystemExit(
+            f"{locale} structural mismatch; "
+            f"missing={missing}, "
+            f"extra={extra}"
+        )
+
+
+    for key, source_value in expected.items():
+        localized_value = actual[key]
+
+        if isinstance(
+            source_value,
+            str,
+        ):
+            if not isinstance(
+                localized_value,
+                str,
+            ):
+                raise SystemExit(
+                    f"{locale} non-string value at {key}"
+                )
+
+            if (
+                localized_value
+                and not localized_value.strip()
+            ):
+                raise SystemExit(
+                    f"{locale} whitespace-only value at {key}"
+                )
+
+            if sorted(
+                placeholder_re.findall(
+                    localized_value
+                )
+            ) != sorted(
+                placeholder_re.findall(
+                    source_value
+                )
+            ):
+                raise SystemExit(
+                    f"{locale} placeholder mismatch at {key}"
+                )
+
+            if (
+                html_tag_re.findall(
+                    localized_value
+                )
+                !=
+                html_tag_re.findall(
+                    source_value
+                )
+            ):
+                raise SystemExit(
+                    f"{locale} HTML tag mismatch at {key}"
+                )
+
+
+locale_definitions = json.loads(
+    (
+        content_root
+        / "locales.json"
+    ).read_text(
+        encoding="utf-8"
+    )
+)
+
+baseline = load_catalog(
+    baseline_locale
+)
+
+
+for definition in locale_definitions:
+    locale = definition["locale"]
+
+    validate_catalog(
+        locale,
+        load_catalog(locale),
+        baseline,
+    )
+
+    print(
+        f"Validated locale catalog structure: {locale}"
+    )
+PY
+}
+
+
+
+
+pm_web_process_site_partials() {
+    local site_root
+    local processor
+
+    site_root="$(
+        pm_web_site_root
+    )"
+
+    processor="${PORTMASON_SHARE}/pm-process-site-partials"
+
+
+    if [[ ! -d "$site_root" ]]; then
+        log INFO \
+            "site partial processing skipped" \
+            "site_root=$site_root"
+
+        return 0
+    fi
+
+
+    [[ -x "$processor" ]] || {
+        die \
+            "pm-process-site-partials is unavailable: $processor" \
+            2
+
+        return 2
+    }
+
+
+    log INFO \
+        "processing site partials and environment tokens" \
+        "site_root=$site_root"
+
+
+    (
+        cd -- "$site_root"
+
+        "$processor"
+    )
+}
+
+
+pm_web_prepare_collections() {
+    local site_root
+    local collections_root
+    local runtime_source
+    local runtime_target
+    local indexer
+
+    site_root="$(
+        pm_web_site_root
+    )"
+
+    collections_root="${site_root}/collections"
+
+    runtime_source="${PORTMASON_SHARE}/web/pm-collections.js"
+
+    indexer="${PORTMASON_SHARE}/pm-index-publication-collections"
+
+
+    if [[ ! -d "$collections_root" ]]; then
+        log INFO \
+            "collection preparation skipped" \
+            "reason=no-collections" \
+            "site_root=$site_root"
+
+        return 0
+    fi
+
+
+    [[ -x "$indexer" ]] || {
+        die \
+            "Portmason publication collection indexer is unavailable: $indexer" \
+            2
+
+        return 2
+    }
+
+
+    [[ -r "$runtime_source" ]] || {
+        die \
+            "Portmason browser collection runtime is unavailable: $runtime_source" \
+            2
+
+        return 2
+    }
+
+
+    #
+    # Preserve a project's existing runtime location when present.
+    #
+    # Portmason-native collections use:
+    #
+    #   collections/_system/pm-collections.js
+    #
+    # ReviewNudge currently uses:
+    #
+    #   assets/pm-collections.js
+    #
+
+    if [[ -n "${PM_COLLECTION_RUNTIME_TARGET:-}" ]]; then
+
+        runtime_target="${site_root}/${PM_COLLECTION_RUNTIME_TARGET#/}"
+
+    elif [[ -e "${site_root}/assets/pm-collections.js" ]]; then
+
+        runtime_target="${site_root}/assets/pm-collections.js"
+
+    else
+
+        runtime_target="${collections_root}/_system/pm-collections.js"
+
+    fi
+
+
+    mkdir -p -- \
+        "$(dirname -- "$runtime_target")"
+
+
+    if [[ ! -r "$runtime_target" ]] \
+        || ! cmp -s \
+            -- \
+            "$runtime_source" \
+            "$runtime_target"
+    then
+        install \
+            -m 0644 \
+            -- \
+            "$runtime_source" \
+            "$runtime_target"
+
+        log INFO \
+            "collection browser runtime synchronized" \
+            "target=$runtime_target"
+    fi
+
+
+    log INFO \
+        "indexing publication collections" \
+        "site_root=$site_root"
+
+
+    "$indexer" \
+        --site-dir \
+        "$site_root"
+}
+
+pm_static_official_build_requested() {
+    case "${PM_OFFICIAL_BUILD:-}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+    esac
+
+    [[ "${GITHUB_ACTIONS:-}" == "true" ]]
+}
+
+pm_finalize_static_build_metadata() {
+    local version_command=""
+
+    pm_static_official_build_requested || {
+        log DEBUG "pm-deploy-static: official build finalization skipped"
+        return 0
+    }
+
+    version_command="$(command -v pm-version || true)"
+    [[ -n "$version_command" ]] || version_command="${PORTMASON_SHARE}/pm-version"
+    [[ -x "$version_command" ]] \
+        || die "pm-version is required to finalize static build metadata" 2
+
+    log INFO "pm-deploy-static: finalizing official build metadata" \
+        "site_dir=$SITE_DIR"
+    PM_VERSION_ROOT="${PROJECT_ROOT}" \
+        "$version_command" build finalize --site-dir "$SITE_DIR" >/dev/null
+}
+
+
+pm_web_setup() {
+    pm_web_validate_locale_catalogs
+    pm_web_install_consent_assets
+    pm_web_process_site_partials
+    pm_web_prepare_collections
+	pm_finalize_static_build_metadata
+}

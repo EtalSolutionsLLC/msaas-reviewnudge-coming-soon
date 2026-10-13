@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability"
+
+main(){
+  pm_observability_require_compose_service log-ingest
+  pm_observability_local_compose up -d --pull missing --wait log-ingest "$@"
+}
+
+main "$@"

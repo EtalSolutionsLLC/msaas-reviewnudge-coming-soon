@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# Portmason Configuration Manager core registry and service-scope mechanics.
+# Source-safe: this file defines capabilities only and performs no lifecycle work.
+
+declare -ga PM_CONFIG_KEYS=()
+declare -gA PM_CONFIG_TYPE=()
+declare -gA PM_CONFIG_SCOPES=()
+declare -gA PM_CONFIG_TARGET=()
+declare -gA PM_CONFIG_REQUIRED=()
+declare -gA PM_CONFIG_OWNER=()
+
+declare -ga PM_CANONICAL_RUNTIME_SECRET_KEYS=()
+declare -ga PM_CANONICAL_CONTROL_PLANE_SECRET_KEYS=()
+declare -ga PM_CANONICAL_SECRET_KEYS=()
+
+pm_config_reset() {
+    PM_CONFIG_KEYS=()
+    PM_CONFIG_TYPE=()
+    PM_CONFIG_SCOPES=()
+    PM_CONFIG_TARGET=()
+    PM_CONFIG_REQUIRED=()
+    PM_CONFIG_OWNER=()
+    PM_CANONICAL_RUNTIME_SECRET_KEYS=()
+    PM_CANONICAL_CONTROL_PLANE_SECRET_KEYS=()
+    PM_CANONICAL_SECRET_KEYS=()
+}
+    fi
+    printf -v "$out_var" '%s' "$result"
+}
+
+
+#####
+##### DEPRECATED by Omer onm 10/2/2026
+#####
+
+# pm_config_registered_source_keys_for_service() {
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local type="${3:?configuration type required}"
+#     local scopes
+#     pm_config_compose_service_scopes scopes "$service" "$role"
+#     pm_config_keys_for_scopes "$type" "$scopes"
+
+#     if [[ "$type" == secret ]]; then
+#         local extra
+#         IFS=',' read -r -a _pm_config_extra_secret_keys <<<"${PM_ADDITIONAL_SECRET_KEYS:-}"
+#         for extra in "${_pm_config_extra_secret_keys[@]}"; do
+#             pm_config_trim extra "$extra"
+#             [[ -n "$extra" ]] && printf '%s\n' "$extra"
+#         done
+#     fi
+# }
+
+# pm_config_unregistered_var_kv_nul_for_service() {
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local strict="${PM_CONFIG_STRICT:-false}"
+#     case "${strict,,}" in
+#         1|true|yes|on) return 0 ;;
+#     esac
+
+#     local file="${ENV_FILE:-${SCRIPT_DIR:-$PWD}/.env}.generated"
+#     [[ -r "$file" ]] || return 0
+#     declare -A emitted=()
+#     local key value
+
+#     while IFS= read -r -d '' key; do
+#         IFS= read -r -d '' value || value=""
+#         [[ -n "$key" && -z "${emitted[$key]+x}" ]] || continue
+#         emitted["$key"]=1
+#         pm_config_key_is_registered "$key" && continue
+#         pm_config_key_looks_secret "$key" && continue
+#         case "$key" in
+#             PM_*|ENV_FILE|SECRET_PATHS|DEBUG|VERBOSE|PATH|HOME|PWD|OLDPWD|SHELL|SHLVL|USER|LOGNAME|LANG|LANGUAGE|LC_*|TERM|XDG_*)
+#                 continue
+#                 ;;
+#         esac
+#         printf '%s\0%s\0' "$key" "$value"
+#     done < <(env_file_to_kv_nul "$file")
+# }
+
+# pm_config_var_kv_nul_for_service() {
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local key value target
+#     declare -A emitted=()
+
+#     while IFS= read -r key; do
+#         [[ -n "$key" ]] || continue
+#         target="${PM_CONFIG_TARGET[$key]:-$key}"
+#         [[ -z "${emitted[$target]+x}" ]] || continue
+#         pm_config_value value "$key"
+#         [[ -n "$value" || "${PM_CONFIG_REQUIRED[$key]}" == required ]] || continue
+#         printf '%s\0%s\0' "$target" "$value"
+#         emitted["$target"]=1
+#     done < <(pm_config_registered_source_keys_for_service "$service" "$role" var)
+
+#     while IFS= read -r -d '' key; do
+#         IFS= read -r -d '' value || value=""
+#         [[ -z "${emitted[$key]+x}" ]] || continue
+#         printf '%s\0%s\0' "$key" "$value"
+#         emitted["$key"]=1
+#     done < <(pm_config_unregistered_var_kv_nul_for_service "$service" "$role")
+# }
+
+# pm_config_secret_binding_nul_for_service() {
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local key value target
+#     declare -A emitted=()
+
+#     while IFS= read -r key; do
+#         [[ -n "$key" ]] || continue
+#         target="${PM_CONFIG_TARGET[$key]:-$key}"
+#         [[ -z "${emitted[$target]+x}" ]] || continue
+#         pm_config_value value "$key"
+#         if [[ -n "$value" ]] || pm_config_secret_override_exists "$key"; then
+#             printf '%s\0%s\0%s\0' "$key" "$target" "$value"
+#             emitted["$target"]=1
+#         fi
+#     done < <(pm_config_registered_source_keys_for_service "$service" "$role" secret)
+# }
+
+# pm_config_secret_kv_nul_for_service() {
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local source target value
+#     while IFS= read -r -d '' source; do
+#         IFS= read -r -d '' target || target="$source"
+#         IFS= read -r -d '' value || value=""
+#         printf '%s\0%s\0' "$target" "$value"
+#     done < <(pm_config_secret_binding_nul_for_service "$service" "$role")
+# }
+
+# pm_config_dotenv_write_pair() {
+#     local file="${1:?file required}"
+#     local key="${2:?key required}"
+#     local value="${3-}"
+#     local encoded
+
+#     case "$value" in
+#         *$'\n'*|*$'\r'*) die "pm-config: refusing multiline value for $key" 2 ;;
+#     esac
+#     encoded="${value//\\/\\\\}"
+#     encoded="${encoded//\'/\\\'}"
+#     printf "%s='%s'\n" "$key" "$encoded" >>"$file"
+# }
+
+# pm_config_write_service_env_file() {
+# 	# NOTE: this function used to generate a subset of the .env file specific to the services
+# 	# I opted to instead just use the complete .env.generated file which is already encrypted
+
+#     local service="${1:?service required}"
+#     local role="${2:?service role required}"
+#     local output_dir="${PM_CONFIG_OUTPUT_DIR:-${SCRIPT_DIR:-$PWD}/.portmason/config}"
+#     local file="${output_dir}/.env.generatedd"
+
+#     mkdir -p -- "$output_dir"
+
+#     cp -a -- "${SITE_DIR}/.env.generated" "$file" \
+#         || die "unable to copy generated configuration: $service" 2
+
+#     log INFO "pm-config: copied encrypted shared environment" \
+#         "service=$service" \
+#         "role=$role" \
+#         "file=$file"
+# }
+
+
+# pm_config_validate_registry() {
+#     local key type scopes target required owner
+#     declare -A targets=()
+#     for key in "${PM_CONFIG_KEYS[@]}"; do
+#         type="${PM_CONFIG_TYPE[$key]-}"
+#         scopes="${PM_CONFIG_SCOPES[$key]-}"
+#         target="${PM_CONFIG_TARGET[$key]-}"
+#         required="${PM_CONFIG_REQUIRED[$key]-}"
+#         owner="${PM_CONFIG_OWNER[$key]-}"
+
+#         [[ -n "$type" ]]             || die "pm-config: registry key is missing type metadata: key=$key" 2
+#         [[ -n "$target" ]]             || die "pm-config: registry key is missing target metadata: key=$key" 2
+#         [[ -n "$required" ]]             || die "pm-config: registry key is missing required metadata: key=$key" 2
+#         [[ -n "$owner" ]]             || die "pm-config: registry key is missing owner metadata: key=$key" 2
+#         [[ "$type" == control-plane || -n "$scopes" ]] \
+#             || die "pm-config: runtime key has no scopes: $key" 2
+#         [[ "$required" == required || "$required" == optional ]] \
+#             || die "pm-config: invalid required flag for $key" 2
+#         targets["$target"]=1
+#     done
+#     pm_config_refresh_canonical_arrays
+# }
+
+# pm_config_validate_required_services() {
+#     [[ -n "${PROJECT_SERVICES:-}" ]] || return 0
+#     local service role key value missing=0
+#     while IFS=$'\t' read -r service role _image _has_build; do
+#         [[ -n "$service" ]] || continue
+#         while IFS= read -r key; do
+#             [[ "${PM_CONFIG_REQUIRED[$key]-}" == required ]] || continue
+#             pm_config_value value "$key"
+#             if [[ -z "$value" ]] && ! pm_config_secret_override_exists "$key"; then
+#                 log ERROR "pm-config: required value missing" \
+#                     "key=$key" \
+#                     "service=$service" \
+#                     "owner=${PM_CONFIG_OWNER[$key]-<unregistered>}"
+#                 missing=1
+#             fi
+#         done < <(
+#             pm_config_registered_source_keys_for_service "$service" "$role" var
+#             pm_config_registered_source_keys_for_service "$service" "$role" secret
+#         )
+#     done < <(jq -r '.[] | [.service,.role,.image,(.has_build|tostring)] | @tsv' \
+#         <<<"${PROJECT_SERVICES:-[]}")
+#     return "$missing"
+# }
+
+# Backward-compatible contract used by existing platform helpers.
+# pm_service_secret_keys() {
+#     local role="${1:?service role required}"
+#     local key extra
+#     while IFS= read -r key; do
+#         [[ -n "$key" ]] || continue
+#         if declare -F pm_secret_key_is_public_exception >/dev/null 2>&1 \
+#             && pm_secret_key_is_public_exception "$key"; then
+#             continue
+#         fi
+#         printf '%s\n' "$key"
+#     done < <(pm_config_keys_for_scopes secret "$role")
+#     IFS=',' read -r -a _pm_extra_secret_keys <<<"${PM_ADDITIONAL_SECRET_KEYS:-}"
+#     for extra in "${_pm_extra_secret_keys[@]}"; do
+#         pm_config_trim extra "$extra"
+#         [[ -n "$extra" ]] || continue
+#         if declare -F pm_secret_key_is_public_exception >/dev/null 2>&1 \
+#             && pm_secret_key_is_public_exception "$extra"; then
+#             continue
+#         fi
+#         printf '%s\n' "$extra"
+#     done
+# }
+
+# pm_service_secret_kv_nul() {
+#     local role="${1:?service role required}"
+#     local key value
+#     while IFS= read -r key; do
+#         [[ -n "$key" ]] || continue
+#         pm_config_value value "$key"
+#         if [[ -n "$value" ]] || pm_config_secret_override_exists "$key"; then
+#             printf '%s\0%s\0' "$key" "$value"
+#         fi
+#     done < <(pm_service_secret_keys "$role" | awk '!seen[$0]++')
+# }
+
+# pm_service_nonsecret_kv_nul() {
+#     local role="${1:?service role required}"
+#     local key value target
+#     while IFS= read -r key; do
+#         [[ -n "$key" ]] || continue
+#         target="${PM_CONFIG_TARGET[$key]:-$key}"
+#         pm_config_value value "$key"
+#         [[ -n "$value" || "${PM_CONFIG_REQUIRED[$key]}" == required ]] || continue
+#         printf '%s\0%s\0' "$target" "$value"
+#     done < <(pm_config_keys_for_scopes var "$role")
+# }

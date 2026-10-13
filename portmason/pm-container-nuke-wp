@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+
+# pm-container-nuke-wp
+# Hook for pm-container-nuke that inspects WP state and returns:
+#  0 = continue unhampered
+#  1 = you should fail, but you *can* choose not to
+#  2 = you better fail, or I'm not promising anything!
+#
+# Called as: pm-container-nuke-wp <scope>
+#   scope = "local"  (no --all)
+#         = "global" (--all)
+
+scope="${1:-local}"
+
+# Global mode: hook can never veto the nuke
+[[ "${scope}" == "global" ]] && exit 0
+
+# If wp helper isn't available, treat as unknown / soft warning
+have wp || exit 0
+
+state="$(wp option get etal_setup_state 2>/dev/null || echo '')"
+
+# exit 0 = success/noop
+# exit 1 = recommended fail
+# exit 2 = opiniated fail which isn't used in this nuke helper
+case "${state}" in
+  custom_config_applied)
+    # Strong signal: customization has been applied; local nuke is dangerous
+    echo "[pm-container-nuke-wp] Development may be in progress on this site. Are you sure you want to "nuke" it?"
+    exit 1
+    ;;
+  *)
+    # e.g. wp_configured or any future benign state → allow nuke, no noise
+    exit 0
+    ;;
+esac

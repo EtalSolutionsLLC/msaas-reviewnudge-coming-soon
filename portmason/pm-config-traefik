@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pm_config_traefik() {
+    if ! declare -F pm_traefik_validate_config >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
+        . "${PORTMASON_SHARE}/pm-helpers-traefik"
+    fi
+    pm_traefik_validate_config
+    local scopes='pm-edge-ingress,traefik,proxy'
+    pm_config_register PM_TRAEFIK_LOG_LEVEL var "$scopes" TRAEFIK_LOG_LEVEL optional
+}

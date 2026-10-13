@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm005() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local base="${path##*/}"
+    local line="1"
+
+    case "$base" in
+        pm-helpers-*|pm-config-*|pm-bridge-*|pm-db-bridge-*) ;;
+        *) return 0 ;;
+    esac
+
+    if grep -Eq '^[[:space:]]*main[[:space:]]+"?\$@"?[[:space:]]*$' "$file"; then
+        if ! grep -Eq 'BASH_SOURCE\[0\].*\$0|\$0.*BASH_SOURCE\[0\]' "$file"; then
+            pm_lint_first_line_number line "$file" '^[[:space:]]*main[[:space:]]+"?\$@"?'
+            pm_lint_report PM005 "$path" "$line" \
+                "Sourceable Portmason module invokes main without an execution guard" \
+                "Sourcing must define capabilities only. Guard executable behavior with BASH_SOURCE[0] == $0."
+        fi
+    fi
+}
+
+pm_lint_register_rule PM005 ERROR file \
+    "Source-safe modules" \
+    "EPC A12.5 Bash-First, Language-Neutral Module Boundary" \
+    pm_lint_rule_pm005

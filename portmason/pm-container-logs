@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${REPO_ROOT:-$(pwd -P)}"
+
+svc="${1:-api}"
+shift || true
+
+# defaults
+tail="${LOG_TAIL:-200}"
+
+exec docker compose logs -t --tail="$tail" "$@" "$svc"

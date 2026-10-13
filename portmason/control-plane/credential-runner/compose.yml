@@ -1,0 +1,17 @@
+services:
+  pm-credential-control:
+    build:
+      context: .
+    image: portmason/credential-control:local
+    env_file:
+      - ./.env.operator
+    environment:
+      # Optional controlled egress. Leave blank for direct host/network egress.
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    volumes:
+      - ./audit:/opt/portmason/credential-runner/audit
+      # Mount the app/environment checkout read-write only when materializing env changes.
+      - ${PM_CREDENTIAL_TARGET_ROOT:-/tmp/portmason-target}:/workspace

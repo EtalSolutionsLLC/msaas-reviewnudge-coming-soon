@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CUR_SCRIPT:=$(basename "${BASH_SOURCE[0]:-${0:-pm-rollback}}")}"
+export CUR_SCRIPT
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+# shellcheck disable=SC1090
+. "${PORTMASON_SHARE}/pm-helpers" --read-only
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  pm-rollback
+
+Interactively roll back the current deployment selected by the .env file in
+the directory where the command is run.
+
+The runtime adapter selects the implementation by name. For example,
+RUNTIME_ADAPTER_CODE=node-gcp invokes pm-choose-revision-gcp.
+USAGE
+}
+
+main() {
+    local adapter_code change_revision_script
+
+    case "${1:-}" in
+        -h|--help)
+            (( $# == 1 )) || {
+                usage >&2
+                return 2
+            }
+            usage
+            return 0
+            ;;
+        "")
+            (( $# == 0 )) || {
+                usage >&2
+                return 2
+            }
+            ;;
+        *)
+            usage >&2
+            return 2
+            ;;
+    esac
+
+    [[ -r "${ENV_FILE:-}" ]] \
+        || die "No readable .env file found. Run pm-rollback from the project or environment folder." 2
+    [[ -n "${DEPLOYMENT_ID:-}" ]] \
+        || die "DEPLOYMENT_ID is required in ${ENV_FILE}" 2
+    [[ -n "${RUNTIME_ADAPTER_CODE:-}" ]] \
+        || die "RUNTIME_ADAPTER_CODE is required in ${ENV_FILE}" 2
+
+    adapter_code="${RUNTIME_ADAPTER_CODE##*-}"
+    change_revision_script="${PORTMASON_SHARE}/pm-choose-revision-${adapter_code}"
+
+    [[ -x "$change_revision_script" ]] \
+        || die "Rollback script is not available: $change_revision_script" 3
+
+    log INFO "Dispatching deployment revision" \
+        "deployment_id=$DEPLOYMENT_ID" \
+        "runtime_adapter_code=$RUNTIME_ADAPTER_CODE" \
+        "script=$(basename -- "$change_revision_script")" \
+        "env_file=$ENV_FILE"
+
+    exec "$change_revision_script"
+}
+
+main "$@"

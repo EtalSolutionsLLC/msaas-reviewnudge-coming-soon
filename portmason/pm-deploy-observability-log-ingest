@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PORTMASON_SHARE:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-${0:-}}")" && pwd -P)}"
+. "${PORTMASON_SHARE}/pm-helpers" "$@"
+. "${PORTMASON_SHARE}/pm-helpers-observability" "$@"
+
+case "${RUNTIME_ADAPTER_CODE:-}" in
+  *-gcp) adapter=gcp ;;
+  *-local) adapter=local ;;
+  *) die "Unsupported observability log-ingest runtime adapter: ${RUNTIME_ADAPTER_CODE:-<unset>}" 2 ;;
+esac
+
+file="${PORTMASON_SHARE}/pm-deploy-observability-collector-${adapter}"
+[[ -r "$file" ]] || die "Missing observability log-ingest adapter: $file" 2
+. "$file" "$@"

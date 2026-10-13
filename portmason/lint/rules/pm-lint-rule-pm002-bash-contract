@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm002() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local first="" line="1"
+
+    pm_lint_is_shell_file "$file" || return 0
+    IFS= read -r first < "$file" || true
+
+    if [[ "$first" != '#!/usr/bin/env bash' ]]; then
+        pm_lint_report PM002 "$path" 1 \
+            "Bash file must begin with #!/usr/bin/env bash" \
+            "Use the canonical Bash shebang so execution is portable across supported environments."
+    fi
+
+    if ! head -n 20 "$file" | grep -Eq '^[[:space:]]*set[[:space:]]+-euo[[:space:]]+pipefail([[:space:]]|$)'; then
+        pm_lint_report PM002 "$path" 2 \
+            "Bash file does not enable set -euo pipefail near the start" \
+            "Add the canonical strict-mode line immediately after the shebang."
+    fi
+
+    if ! bash -n "$file" >/dev/null 2>&1; then
+        pm_lint_first_line_number line "$file" '.'
+        pm_lint_report PM002 "$path" "$line" \
+            "Bash syntax validation failed" \
+            "Run bash -n on the file and correct the reported syntax error."
+    fi
+}
+
+pm_lint_register_rule PM002 ERROR file \
+    "Bash header and syntax contract" \
+    "TGF Coding Standards / Shell" \
+    pm_lint_rule_pm002

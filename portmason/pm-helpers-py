@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="${script_name:-$(basename "${BASH_SOURCE[0]}")}"
+
+# --- Configuration (env overridable) ---
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+CLI_ENTRYPOINT_FILE="${CLI_ENTRYPOINT_FILE:-${PROJECT_DIR}/main.py}"
+CLI_ENTRYPOINT_MODULE="${CLI_ENTRYPOINT_MODULE:-}"
+CLI_DEFAULT_ARGS="${CLI_DEFAULT_ARGS:-}"
+
+run() {
+  ensure_env_created
+  "$(venv_python)" "$@"
+}
+
+install_core() { :; }
+nuke_runtime_content() { :; }
+ensure_plugin() { :; }
+ensure_page() { log "ensure_page noop"; }
+page_id_by_slug() { log "page_id_by_slug noop"; }
+detect_menu_location() { log "detect_menu_location noop"; }
+ensure_theme() { log "ensure_theme noop"; }
+ensure_menu() { log "ensure_menu noop"; }
+add_menu_page() { log "add_menu_page noop"; }
+remove_content() { :; }

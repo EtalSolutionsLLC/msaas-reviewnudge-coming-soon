@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pm_lint_rule_pm001() {
+    local path="${1:?path required}"
+    local file="${2:?file required}"
+    local base=""
+
+    pm_lint_portmason_top_level_basename base "$path" || return 0
+    pm_lint_is_shell_file "$file" || return 0
+    [[ "$base" == pm-* ]] && return 0
+
+    pm_lint_report PM001 "$path" 1 \
+        "Portmason shell capability is outside the pm- namespace: $base" \
+        "Rename the command or module to pm-<capability> so product identity and discovery remain consistent."
+}
+
+pm_lint_register_rule PM001 ERROR file \
+    "Portmason namespace" \
+    "TGF Tooling Discipline; EPC A12.5" \
+    pm_lint_rule_pm001
